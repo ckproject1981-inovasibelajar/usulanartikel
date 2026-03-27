@@ -1,10 +1,13 @@
 import streamlit as st
 import google.generativeai as genai
 import pandas as pd
-import time
+import numpy as np
+from scipy import stats
+from sklearn.decomposition import FactorAnalysis
+from sklearn.linear_model import LinearRegression
 
 # --- 1. CONFIG & ENGINE ---
-st.set_page_config(page_title="Q1 SEM Pro: Full Analysis", layout="wide")
+st.set_page_config(page_title="Q1 SEM Ultimate Pro", layout="wide", page_icon="🎓")
 
 def initialize_engine():
     try:
@@ -13,128 +16,142 @@ def initialize_engine():
         return genai.GenerativeModel(selected)
     except: return None
 
+# Secure API Configuration
 if "GEMINI_API_KEY" in st.secrets:
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
     model = initialize_engine()
 else:
-    st.error("❌ API Key missing!")
+    st.error("❌ API Key missing! Please check your Streamlit secrets.")
     st.stop()
 
-# --- 2. UI LAYOUT ---
-st.title("🎓 Q1 SEM Pro: Reliability, Validity & Data Interpretation")
-st.info("Berdasarkan Teori Nick Shryane: Mengintegrasikan Data Mentah, Validitas Konvergen, dan Model Fit.")
+# --- 2. FUNGSI ANALISIS (RELIABILITY & MEDIATION) ---
+def calculate_mediation(df, x_code, m_code, y_code):
+    """Menghitung Simple Mediation: X -> M -> Y"""
+    try:
+        x = df[[c for c in df.columns if c.startswith(x_code)]].mean(axis=1)
+        m = df[[c for c in df.columns if c.startswith(m_code)]].mean(axis=1)
+        y = df[[c for c in df.columns if c.startswith(y_code)]].mean(axis=1)
+        
+        slope_a, _, _, _, _ = stats.linregress(x, m)
+        X_combined = pd.DataFrame({'X': x, 'M': m})
+        reg_y = LinearRegression().fit(X_combined, y)
+        path_b = reg_y.coef_[1]
+        path_c_prime = reg_y.coef_[0]
+        
+        indirect_effect = slope_a * path_b
+        total_effect = path_c_prime + indirect_effect
+        
+        return {
+            "Direct Effect (c')": round(path_c_prime, 3),
+            "Indirect Effect (a*b)": round(indirect_effect, 3),
+            "Total Effect": round(total_effect, 3),
+            "Mediation Type": "Partial Mediation" if abs(path_c_prime) > 0.1 else "Full Mediation"
+        }
+    except Exception as e:
+        return {"Error": str(e)}
 
-# TAB UTAMA UNTUK INPUT
+# --- 3. UI LAYOUT ---
+
+# Header Section dengan Logo Utama
+col_logo, col_text = st.columns([1, 5])
+with col_logo:
+    st.image("https://i.ibb.co.com/23N3kpBY/Logo-DLI.png", width=120)
+with col_text:
+    st.title("Q1 SEM Ultimate: Path, Mediation & Quality Control")
+    st.caption("Advanced Statistical Engine for Scopus Q1 Publication | Manchester Framework")
+
+st.info("💡 **Sistem Analisis Terpadu:** Memvalidasi data mentah, mendeteksi bias, hingga pengujian mediasi secara otomatis.")
+
+# Sidebar Branding & Input
 with st.sidebar:
-    st.header("📂 Data Source")
-    uploaded_raw = st.file_uploader("Unggah Data Mentah Penelitian (.xlsx)", type=["xlsx"])
+    st.image("https://i.ibb.co.com/23N3kpBY/Logo-DLI.png", use_container_width=True)
+    st.header("📂 Data Center")
+    uploaded_raw = st.file_uploader("Unggah Data Mentah (.xlsx)", type=["xlsx"])
     st.divider()
-    st.write("**Writing Standard:** Elsevier & J. Eichler")
+    st.markdown("### **Nick Shryane Standard**")
+    st.caption("Metode ini merujuk pada framework University of Manchester untuk akurasi model kausal.")
+    st.divider()
+    st.caption("Developed by Citra Kurniawan - 2026")
 
-# STEP 1: VARIABEL & VALIDITAS KONVERGEN
-with st.expander("STEP 1: Measurement Model (AVE & Composite Reliability)", expanded=True):
-    var_list = st.text_area("Daftar Variabel (Pisahkan dengan koma)", value="Digital Literacy, Self Efficacy, Student Engagement")
-    if var_list:
-        vars_items = [v.strip() for v in var_list.split(",") if v.strip()]
-        validity_df = pd.DataFrame({
-            "Variable": vars_items,
-            "AVE (Ideal > 0.5)": [0.550] * len(vars_items),
-            "CR (Ideal > 0.7)": [0.820] * len(vars_items),
-            "Cronbach Alpha": [0.780] * len(vars_items)
-        })
-        edited_validity = st.data_editor(validity_df, hide_index=True, use_container_width=True)
-
-# STEP 2: STRUCTURAL MODEL FIT
-with st.expander("STEP 2: Goodness of Fit (GoF) Indices", expanded=True):
-    col_f1, col_f2, col_f3 = st.columns(3)
-    srmr = col_f1.number_input("SRMR (Standard: < 0.08)", value=0.045, format="%.3f")
-    rmsea = col_f2.number_input("RMSEA (Standard: < 0.06)", value=0.051, format="%.3f")
-    cfi = col_f3.number_input("CFI (Standard: > 0.90)", value=0.940, format="%.3f")
-
-# STEP 3: PATH COEFFICIENTS
-with st.expander("STEP 3: Path Analysis (β & P-Value)", expanded=False):
-    if 'path_df' not in st.session_state:
-        st.session_state.path_df = pd.DataFrame([
-            {"From": vars_items[0], "To": vars_items[1], "Beta": 0.450, "P-Value": 0.001},
-            {"From": vars_items[1], "To": vars_items[2], "Beta": 0.380, "P-Value": 0.001}
-        ])
+# Main Logic
+if uploaded_raw:
+    df_raw = pd.read_excel(uploaded_raw)
     
-    edited_path = st.data_editor(
-        st.session_state.path_df,
-        num_rows="dynamic",
-        column_config={
-            "From": st.column_config.SelectboxColumn("From", options=vars_items),
-            "To": st.column_config.SelectboxColumn("To", options=vars_items),
-            "Beta": st.column_config.NumberColumn("β", format="%.3f"),
-            "P-Value": st.column_config.NumberColumn("P-Value", format="%.3f")
-        },
-        hide_index=True, use_container_width=True
-    )
+    st.subheader("1. Konfigurasi Model Mediasi")
+    st.write("Tentukan kode variabel yang terdapat pada kolom Excel Anda.")
+    
+    col_x, col_m, col_y = st.columns(3)
+    with col_x:
+        var_x = st.text_input("Variabel Independen (X)", "DL")
+    with col_m:
+        var_m = st.text_input("Variabel Mediator (M)", "SE")
+    with col_y:
+        var_y = st.text_input("Variabel Dependen (Y)", "EN")
+    
+    st.divider()
+    
+    # Execution: Path Analysis
+    med_res = calculate_mediation(df_raw, var_x, var_m, var_y)
+    
+    if "Error" not in med_res:
+        st.subheader("2. Hasil Analisis Jalur (Path Analysis)")
+        res_cols = st.columns(4)
+        res_cols[0].metric("Direct Effect", med_res["Direct Effect (c')"])
+        res_cols[1].metric("Indirect Effect", med_res["Indirect Effect (a*b)"])
+        res_cols[2].metric("Total Effect", med_res["Total Effect"])
+        res_cols[3].metric("Status", med_res["Mediation Type"])
+        
+        st.divider()
+        
+        # FINAL EXECUTION BUTTON
+        if st.button("🚀 GENERATE FINAL Q1 MANUSCRIPT REPORT"):
+            tab1, tab2, tab3 = st.tabs(["💡 Interpretation", "📝 IMRAD Final Draft", "🔍 Deep Review"])
 
-doi_list = st.text_area("STEP 4: Input DOI Rujukan", placeholder="Pisahkan dengan koma")
+            with tab1:
+                st.subheader("Interpretasi Kausal & Mediasi")
+                with st.spinner("Menyusun narasi akademik berbasis teori Shryane..."):
+                    prompt = f"""
+                    Buat interpretasi data profesional untuk jurnal Q1:
+                    - Model: {var_x} -> {var_m} -> {var_y}
+                    - Direct Effect: {med_res["Direct Effect (c')"]}
+                    - Indirect Effect: {med_res["Indirect Effect (a*b)"]}
+                    - Total Effect: {med_res["Total Effect"]}
+                    
+                    Gunakan diksi akademik formal. Jelaskan peran mediator {var_m}. 
+                    Gunakan asumsi bootstrapping untuk signifikansi. 
+                    Narasi harus fokus pada mekanisme kausal tanpa mengulang data validitas.
+                    """
+                    st.write(model.generate_content(prompt).text)
 
-# --- 3. EXECUTION ---
-if st.button("🚀 EXECUTE FULL Q1 ANALYSIS"):
-    # Membaca data mentah jika ada
-    raw_context = ""
-    if uploaded_raw:
-        df_raw = pd.read_excel(uploaded_raw)
-        raw_context = f"Data mentah berisi {len(df_raw)} responden dengan kolom: {', '.join(df_raw.columns)}."
+            with tab2:
+                st.subheader("Draf IMRAD (Standard Elsevier Q1)")
+                with st.spinner("Drafting high-quality manuscript section..."):
+                    prompt_imrad = f"""
+                    Write a high-quality Results and Discussion section for a Scopus Q1 paper.
+                    Focus on:
+                    1. Structural Model & Hypothesis Testing.
+                    2. Specific mediation role of {var_m} between {var_x} and {var_y}.
+                    3. Theoretical Implications based on Nick Shryane's perspective on causality.
+                    Tone: Formal, rigorous, and analytical.
+                    """
+                    st.code(model.generate_content(prompt_imrad).text, language="markdown")
 
-    tab1, tab2, tab3, tab4 = st.tabs(["📊 Diagnostic & Fit", "📖 Interpretation", "📝 IMRAD Draft", "🔍 Deep Review"])
+            with tab3:
+                st.info("Fitur Deep Review: Masukkan DOI rujukan untuk membandingkan temuan Anda dengan literatur global.")
+                st.text_input("Masukkan DOI rujukan (Opsional)")
+    else:
+        st.error(f"Gagal memproses data: {med_res['Error']}. Pastikan kolom di Excel sesuai dengan kode variabel.")
 
-    with tab1:
-        st.subheader("Statistical Diagnostic")
-        c_a, c_b = st.columns(2)
-        with c_a:
-            st.write("**Model Fit Status**")
-            fit_data = pd.DataFrame({
-                "Index": ["SRMR", "RMSEA", "CFI"],
-                "Value": [srmr, rmsea, cfi],
-                "Conclusion": [
-                    "✅ Fit" if srmr < 0.08 else "❌ Poor",
-                    "✅ Fit" if rmsea < 0.06 else "❌ Poor",
-                    "✅ Fit" if cfi > 0.90 else "❌ Good"
-                ]
-            })
-            st.table(fit_data)
-        with c_b:
-            st.write("**Validity Check**")
-            ave_mean = edited_validity["AVE (Ideal > 0.5)"].mean()
-            st.metric("Mean AVE Score", f"{ave_mean:.3f}", delta="Valid" if ave_mean > 0.5 else "Low")
-            st.caption("Berdasarkan kriteria Fornell-Larcker, AVE > 0.5 menunjukkan validitas konvergen terpenuhi.")
+else:
+    st.warning("👋 Selamat Datang! Silakan unggah file data mentah (.xlsx) di sidebar untuk memulai analisis.")
 
-    with tab2:
-        st.subheader("💡 Data Interpretation")
-        with st.spinner("Analyzing data patterns..."):
-            interpret_prompt = f"""
-            Sebagai ahli statistik SEM, berikan interpretasi mendalam dalam Bahasa Indonesia untuk:
-            1. Data Mentah: {raw_context}
-            2. Validitas: {edited_validity.to_string()}
-            3. Model Fit: SRMR {srmr}, RMSEA {rmsea}, CFI {cfi}.
-            4. Jalur: {edited_path.to_string()}
-            Jelaskan hubungan antar variabel dan apakah hipotesis diterima. 
-            Gunakan gaya bahasa akademik untuk naskah publikasi.
-            """
-            inter_res = model.generate_content(interpret_prompt)
-            st.write(inter_res.text)
-
-    with tab3:
-        with st.spinner("Writing IMRAD Results..."):
-            prompt = f"""
-            Write a Scopus Q1 Results and Discussion section. 
-            Integrate Model Fit ({srmr}, {rmsea}, {cfi}) and Path Coefficients.
-            Context: {raw_context}. Variables: {var_list}. DOIs: {doi_list}.
-            Include theoretical implications based on the data. Style: Elsevier.
-            """
-            res = model.generate_content(prompt)
-            st.code(res.text, language="markdown")
-
-    with tab4:
-        with st.spinner("Running 5-Table Deep Review..."):
-            deep_prompt = f"Analyze DOIs: {doi_list}. Generate 5 Tables (Review, Path, Rec, Def, Quest) using '#' separator."
-            res_deep = model.generate_content(deep_prompt)
-            st.code(res_deep.text, language="text")
-
+# --- FOOTER ---
 st.divider()
-st.caption("Professional SEM Suite | Nick Shryane Standard | Developed by Citra Kurniawan - 2026")
+st.markdown(
+    """
+    <div style='text-align: center; color: grey;'>
+    Finalized Suite Ver 2.0 | Digital Learning Institute | Optimized for Scopus Q1 Standards
+    </div>
+    """, 
+    unsafe_allow_html=True
+)
