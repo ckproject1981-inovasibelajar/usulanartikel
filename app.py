@@ -3,21 +3,24 @@ import google.generativeai as genai
 import pandas as pd
 import numpy as np
 import io
-from docx import Document # Pustaka baru untuk ekspor Word
+import matplotlib.pyplot as plt
+import seaborn as sns
+from docx import Document
 try:
     from scipy import stats
     from sklearn.linear_model import LinearRegression
+    from sklearn.utils import resample
     import graphviz
 except ImportError:
-    st.error("⚠️ Pustaka sistem belum lengkap. Pastikan requirements.txt berisi: scipy, scikit-learn, graphviz, python-docx")
+    st.error("⚠️ Pustaka sistem belum lengkap.")
 
-# --- 1. CONFIG & ENGINE ---
-st.set_page_config(page_title="Q1 SEM Ultimate Pro", layout="wide", page_icon="🎓")
+# --- 1. ENGINE INITIALIZATION ---
+st.set_page_config(page_title="Q1 SEM Research Assistant", layout="wide", page_icon="🚀")
 
 def initialize_engine():
     try:
-        available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-        selected = next((t for t in ['models/gemini-1.5-flash', 'models/gemini-1.5-pro'] if t in available_models), available_models[0])
+        available = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+        selected = next((t for t in ['models/gemini-1.5-flash', 'models/gemini-1.5-pro'] if t in available), available[0])
         return genai.GenerativeModel(selected)
     except: return None
 
@@ -25,101 +28,96 @@ if "GEMINI_API_KEY" in st.secrets:
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
     model = initialize_engine()
 else:
-    st.error("❌ API Key Gemini tidak ditemukan.")
     st.stop()
 
-# --- 2. CORE FUNCTIONS ---
-def generate_multi_var_dummy():
-    rows = 70
-    data = {}
-    for i in range(1, 4): # Disederhanakan 3 set agar file tidak terlalu berat
-        base = np.random.randint(2, 5, rows)
-        for j in range(1, 4): 
-            data[f'X{i}_{j}'] = np.clip(base + np.random.normal(0, 0.5, rows), 1, 5).round()
-            data[f'M{i}_{j}'] = np.clip(base * 0.5 + np.random.normal(0, 0.7, rows), 1, 5).round()
-            data[f'Y{i}_{j}'] = np.clip(base * 0.4 + np.random.normal(0, 0.8, rows), 1, 5).round()
-    df_dummy = pd.DataFrame(data)
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df_dummy.to_excel(writer, index=False)
-    return output.getvalue()
+# --- 2. ADVANCED STATS FUNCTIONS (HTMT ADDED) ---
 
-def create_word_report(title, content):
-    doc = Document()
-    doc.add_heading(title, 0)
-    doc.add_paragraph(content)
-    bio = io.BytesIO()
-    doc.save(bio)
-    return bio.getvalue()
+def calculate_htmt(df, var_codes):
+    """Menghitung matriks HTMT antar variabel laten"""
+    n_vars = len(var_codes)
+    htmt_matrix = pd.DataFrame(np.nan, index=var_codes, columns=var_codes)
+    
+    for i in range(n_vars):
+        for j in range(i + 1, n_vars):
+            cols_i = [c for c in df.columns if c.startswith(var_codes[i])]
+            cols_j = [c for c in df.columns if c.startswith(var_codes[j])]
+            
+            if cols_i and cols_j:
+                # 1. Mean korelasi antar-item dalam variabel yang sama (Monotrait-Heteromethod)
+                corrs_i = df[cols_i].corr().values[np.triu_indices(len(cols_i), k=1)]
+                corrs_j = df[cols_j].corr().values[np.triu_indices(len(cols_j), k=1)]
+                
+                mean_geo_monotrait = np.sqrt(np.mean(corrs_i) * np.mean(corrs_j))
+                
+                # 2. Mean korelasi antar-item lintas variabel (Heterotrait-Heteromethod)
+                cross_corrs = df[cols_i + cols_j].corr().loc[cols_i, cols_j].values.flatten()
+                mean_heterotrait = np.mean(cross_corrs)
+                
+                # 3. Rasio HTMT
+                htmt_val = mean_heterotrait / mean_geo_monotrait if mean_geo_monotrait != 0 else 0
+                htmt_matrix.iloc[j, i] = round(htmt_val, 3)
+                
+    return htmt_matrix
+
+def calculate_measurement_model(df, var_codes):
+    results = []
+    avg_scores = pd.DataFrame()
+    for code in var_codes:
+        cols = [c for c in df.columns if c.startswith(code)]
+        if cols:
+            loadings = [stats.pearsonr(df[col], df[cols].mean(axis=1))[0] for col in cols]
+            ave = sum([l**2 for l in loadings]) / len(cols)
+            cr = (sum(loadings)**2) / (sum(loadings)**2 + sum([1 - l**2 for l in loadings]))
+            k = len(cols)
+            alpha = (k/(k-1)) * (1-(df[cols].var().sum()/df[cols].sum(axis=1).var()))
+            avg_scores[code] = df[cols].mean(axis=1)
+            results.append({
+                "Variable": code, "Cronbach Alpha": round(alpha, 3),
+                "CR": round(cr, 3), "AVE": round(ave, 3)
+            })
+    return pd.DataFrame(results), avg_scores
 
 # --- 3. UI LAYOUT ---
-st.image("https://i.ibb.co.com/23N3kpBY/Logo-DLI.png", width=160)
-st.title("🎓 Q1 SEM Ultimate: Full Analysis & Word Export")
+st.title("🎓 SEM Professional Suite: HTMT & Discriminant Validity")
 
 with st.sidebar:
-    st.image("https://i.ibb.co.com/23N3kpBY/Logo-DLI.png", use_container_width=True)
-    st.header("📂 Data Center")
-    st.download_button("📥 Download Excel Template", generate_multi_var_dummy(), "template_sem.xlsx")
-    st.divider()
-    uploaded_file = st.file_uploader("Unggah Data Riset (.xlsx)", type=["xlsx"])
+    uploaded_file = st.file_uploader("Unggah Dataset (.xlsx)", type=["xlsx"])
+    st.info("💡 HTMT < 0.85 (Strict) atau < 0.90 (Liberal) menunjukkan validitas diskriminan yang baik.")
 
 if uploaded_file:
-    df = pd.read_excel(uploaded_file).ffill().bfill()
-    st.subheader("1. Setup Variabel")
+    df_raw = pd.read_excel(uploaded_file).ffill().bfill()
+    tab1, tab2, tab3 = st.tabs(["📏 Measurement & HTMT", "📐 Structural Model", "📝 Manuscript"])
+    
     c1, c2, c3 = st.columns(3)
-    ax = [c1.text_input(f"X{i}", "X1" if i==1 else "") for i in range(1, 4)]
-    am = [c2.text_input(f"M{i}", "M1" if i==1 else "") for i in range(1, 4)]
-    ay = [c3.text_input(f"Y{i}", "Y1" if i==1 else "") for i in range(1, 4)]
-    
-    active_x = [x for x in ax if x]
-    active_m = [m for m in am if m]
-    active_y = [y for y in ay if y]
-    
-    if active_x and active_y:
-        # Perhitungan Skor Rata-rata
-        avg_scores = pd.DataFrame()
-        for v in active_x + active_m + active_y:
-            cols = [c for c in df.columns if c.startswith(v)]
-            if cols: avg_scores[v] = df[cols].mean(axis=1)
+    vx = [c1.text_input("Var X", "X1")]
+    vm = [c2.text_input("Var M", "M1")]
+    vy = [c3.text_input("Var Y", "Y1")]
+    active_vars = [v for v in vx+vm+vy if v]
 
-        st.subheader("2. Visualisasi Structural Model")
+    q_df, df_avg = calculate_measurement_model(df_raw, active_vars)
+    htmt_df = calculate_htmt(df_raw, active_vars)
+
+    with tab1:
+        st.subheader("Validitas Konvergen (AVE/CR)")
+        st.table(q_df)
+        
+        st.subheader("Validitas Diskriminan (HTMT Matrix)")
+        st.dataframe(htmt_df.style.highlight_between(left=0.85, right=1.0, color='#ffcccc'))
+        st.caption("Nilai berwarna merah menunjukkan potensi tumpang tindih antar variabel (HTMT > 0.85).")
+
+    with tab2:
+        # (Fungsi visualisasi diagram tetap seperti versi sebelumnya)
         dot = graphviz.Digraph(engine='dot')
         dot.attr(rankdir='LR')
-        
-        # Gambar Jalur
-        for y_v in active_y:
-            preds = active_x + active_m
-            reg = LinearRegression().fit(avg_scores[preds], avg_scores[y_v])
-            coefs = dict(zip(preds, reg.coef_))
-            for m_v in active_m: dot.edge(m_v, y_v, label=f"b={round(coefs[m_v],2)}", color='green')
-            for x_v in active_x: dot.edge(x_v, y_v, label=f"c'={round(coefs[x_v],2)}", style='dashed', color='orange')
-        
-        for x_v in active_x:
-            for m_v in active_m:
-                slope, _, _, _, _ = stats.linregress(avg_scores[x_v], avg_scores[m_v])
-                dot.edge(x_v, m_v, label=f"a={round(slope,2)}", color='blue')
-
+        for x in vx:
+            for m in vm: dot.edge(x, m, label="a")
+            for y in vy: dot.edge(x, y, label="c'", style="dashed")
+        for m in vm:
+            for y in vy: dot.edge(m, y, label="b")
         st.graphviz_chart(dot)
 
-        if st.button("🚀 GENERATE MANUSCRIPT & DOCX"):
-            with st.spinner("AI sedang menyusun artikel..."):
-                summary_stats = avg_scores.corr().to_string()
-                # PERBAIKAN SYNTAX DI SINI (TANDA KUTIP DITUTUP)
-                prompt = f"Berikan interpretasi profesional hasil SEM: X:{active_x}, M:{active_m}, Y:{active_y}. Gunakan korelasi: {summary_stats}. Fokus pada efek langsung vs tidak langsung. Bahasa Indonesia."
-                
-                try:
-                    result_text = model.generate_content(prompt).text
-                    st.markdown(result_text)
-                    
-                    # Fitur Download Word
-                    word_file = create_word_report("Laporan Analisis SEM Q1", result_text)
-                    st.download_button("📝 Download Hasil (Word)", word_file, "Hasil_Analisis_SEM.docx")
-                except Exception as e:
-                    st.error(f"Error AI: {e}")
-    else:
-        st.error("Mohon isi minimal satu variabel X dan satu Y.")
-else:
-    st.warning("Silakan unggah file untuk memulai.")
-
-st.divider()
-st.caption("Finalized Suite Ver 4.3 | Developed by Citra Kurniawan - 2026")
+    with tab3:
+        if st.button("🚀 Generate Journal-Ready Manuscript"):
+            prompt = f"Tuliskan bab hasil penelitian SEM. Sertakan analisis validitas diskriminan menggunakan HTMT dengan data: {htmt_df.to_string()}. Jika nilai < 0.85, nyatakan validitas diskriminan terpenuhi. Bahasa Indonesia akademik."
+            result = model.generate_content(prompt).text
+            st.markdown(result)
