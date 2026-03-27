@@ -126,7 +126,7 @@ def perform_bootstrapping(df_avg, x_list, m_list, y_list):
 # --- 4. UI LAYOUT ---
 st.image("https://i.ibb.co.com/23N3kpBY/Logo-DLI.png", width=160)
 st.title("🎓 SEM Dynamic Research Assistant")
-st.caption("Standardized for Q1 Journal Submissions | Digital Learning Institute 2026")
+st.caption("Standardized for Q1 Journal Submissions | Disruptive Learning Innovation 2026")
 
 with st.sidebar:
     st.header("📂 Data Center")
