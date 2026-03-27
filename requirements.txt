@@ -19,3 +19,13 @@ scikit-learn
 graphviz
 openpyxl
 python-docx
+streamlit
+google-generativeai
+pandas
+numpy
+scipy
+scikit-learn
+graphviz
+python-docx
+matplotlib
+seaborn
