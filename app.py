@@ -1,133 +1,116 @@
 import streamlit as st
 import google.generativeai as genai
 import pandas as pd
-import time
 
-# --- 1. KONFIGURASI HALAMAN ---
-st.set_page_config(page_title="Q1 Research Pro: Adaptive", layout="wide")
+# --- 1. CONFIG & ENGINE ---
+st.set_page_config(page_title="Q1 SEM Gold Standard", layout="wide")
 
-# --- 2. ENGINE INITIALIZATION ---
 def initialize_engine():
     try:
         available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-        priority_list = ['models/gemini-1.5-flash', 'models/gemini-1.5-pro']
-        selected = next((t for t in priority_list if t in available_models), available_models[0] if available_models else None)
-        return genai.GenerativeModel(selected), selected
-    except Exception as e:
-        return None, str(e)
+        selected = next((t for t in ['models/gemini-1.5-flash', 'models/gemini-1.5-pro'] if t in available_models), available_models[0])
+        return genai.GenerativeModel(selected)
+    except: return None
 
-def safe_generate(model, prompt):
-    for attempt in range(3):
-        try:
-            return model.generate_content(prompt)
-        except Exception:
-            time.sleep(10)
-    return None
-
-# --- 3. SETUP API ---
 if "GEMINI_API_KEY" in st.secrets:
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-    model_instance, active_model_name = initialize_engine()
+    model = initialize_engine()
 else:
-    st.error("❌ API Key missing! Silakan cek Streamlit Secrets.")
+    st.error("❌ API Key missing!")
     st.stop()
 
-# --- 4. UI INPUT & DYNAMIC LOGIC ---
-st.title("🎓 Education AI: Scopus Q1 Adaptive Suite")
+# --- 2. UI LAYOUT ---
+st.title("🎓 Q1 SEM Pro: Reliability & Validity Suite")
+st.info("Berdasarkan Teori Nick Shryane: Memastikan Validitas Konvergen & Model Fit.")
 
-with st.expander("A. STATISTICAL CONFIGURATION", expanded=True):
-    # PILIHAN ANALISIS DULU
-    tool = st.selectbox("Pilih Jenis Analisis", 
-                        ["PLS-SEM (SmartPLS)", "CB-SEM (AMOS)", "Multiple Linear Regression", "T-Test / ANOVA"])
+# STEP 1: VARIABEL & VALIDITAS KONVERGEN
+with st.expander("STEP 1: Measurement Model (AVE & Composite Reliability)", expanded=True):
+    var_list = st.text_area("Daftar Variabel (Pisahkan dengan koma)", value="Digital Literacy, Self Efficacy, Student Engagement")
+    if var_list:
+        vars_items = [v.strip() for v in var_list.split(",") if v.strip()]
+        
+        st.write("**Validitas Konvergen & Reliabilitas**")
+        validity_df = pd.DataFrame({
+            "Variable": vars_items,
+            "AVE (Ideal > 0.5)": [0.000] * len(vars_items),
+            "CR (Ideal > 0.7)": [0.000] * len(vars_items),
+            "Cronbach Alpha": [0.000] * len(vars_items)
+        })
+        edited_validity = st.data_editor(validity_df, hide_index=True, use_container_width=True)
+
+# STEP 2: STRUCTURAL MODEL FIT
+with st.expander("STEP 2: Goodness of Fit (GoF) Indices", expanded=True):
+    col_f1, col_f2, col_f3 = st.columns(3)
+    srmr = col_f1.number_input("SRMR (Standard: < 0.08)", value=0.000, format="%.3f")
+    rmsea = col_f2.number_input("RMSEA (Standard: < 0.06)", value=0.000, format="%.3f")
+    cfi = col_f3.number_input("CFI (Standard: > 0.90)", value=0.000, format="%.3f")
+
+# STEP 3: PATH COEFFICIENTS
+with st.expander("STEP 3: Path Analysis (β & P-Value)", expanded=False):
+    if 'path_df' not in st.session_state:
+        st.session_state.path_df = pd.DataFrame(columns=["From", "To", "Beta", "P-Value"])
     
-    st.divider()
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.subheader("Variabel Input")
-        # Logika Kondisional Variabel
-        iv = st.text_input("Independent Variable (X)", value="Digital Literacy")
-        
-        # Mediator hanya muncul jika SEM
-        mv = None
-        if "SEM" in tool:
-            mv = st.text_input("Mediator Variable (M)", value="Teacher Self-Efficacy")
-        
-        dv = st.text_input("Dependent Variable (Y)", value="Student Engagement")
-
-    with col2:
-        st.subheader("Koefisien Jalur (β) / Statistik")
-        # Logika Kondisional Input Koefisien
-        beta_xm, beta_my, beta_xy = 0.0, 0.0, 0.0
-        
-        if "SEM" in tool:
-            c1, c2, c3 = st.columns(3)
-            beta_xm = c1.number_input("β (X→M)", value=0.45)
-            beta_my = c2.number_input("β (M→Y)", value=0.38)
-            beta_xy = c3.number_input("β (X→Y) Direct", value=0.12)
-        elif "Regression" in tool:
-            beta_xy = st.number_input("Standardized Beta (β)", value=0.50)
-        else: # T-Test / ANOVA
-            t_value = st.number_input("T-Value / F-Value", value=2.54)
-            p_value = st.number_input("P-Value", value=0.01, format="%.3f")
-
-with st.expander("B. RESEARCH DATA INPUT (EXCEL)"):
-    uploaded_file = st.file_uploader("Unggah file Excel hasil olah data", type=["xlsx"])
-    doi_list = st.text_area("C. Upload DOI Pendukung (Pisahkan dengan koma)")
-
-# --- 5. VISUALIZER FUNCTION ---
-def st_mermaid(code):
-    st.components.v1.html(
-        f"""
-        <div class="mermaid" style="display: flex; justify-content: center;">{code}</div>
-        <script type="module">
-            import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
-            mermaid.initialize({{ startOnLoad: true, theme: 'neutral' }});
-        </script>
-        """, height=350,
+    edited_path = st.data_editor(
+        st.session_state.path_df,
+        num_rows="dynamic",
+        column_config={
+            "From": st.column_config.SelectboxColumn("From", options=vars_items),
+            "To": st.column_config.SelectboxColumn("To", options=vars_items),
+            "Beta": st.column_config.NumberColumn("β", format="%.3f"),
+            "P-Value": st.column_config.NumberColumn("P-Value", format="%.3f")
+        },
+        hide_index=True, use_container_width=True
     )
 
-def render_model(tool, x, m, y, b1, b2, b3):
-    if "SEM" in tool:
-        code = f'graph LR\n  X["{x}"] -- "β={b1}" --> M["{m}"]\n  M -- "β={b2}" --> Y["{y}"]\n  X -. "β={b3}" .-> Y'
-    elif "Regression" in tool:
-        code = f'graph LR\n  X["{x}"] -- "β={b3}" --> Y["{y}"]'
-    else: # T-Test
-        code = f'graph TD\n  X["Kelompok {x}"] -- "Sig. Comparison" --> Y["Skor {y}"]'
-    
-    st_mermaid(code)
+doi_list = st.text_area("STEP 4: Input DOI Rujukan", placeholder="Pisahkan dengan koma")
 
-# --- 6. EKSEKUSI ---
-if st.button("🚀 EXECUTE FULL RESEARCH SUITE"):
-    if not iv or not dv:
-        st.warning("Mohon lengkapi nama variabel.")
-    else:
-        tabs = st.tabs(["📊 Research Model", "📝 IMRAD Draft", "🔍 Deep Review", "📚 References"])
+# --- 3. EXECUTION ---
+if st.button("🚀 EXECUTE Q1 VALIDATION & DRAFTING"):
+    tab1, tab2, tab3 = st.tabs(["📊 Diagnostic Report", "📝 IMRAD Draft", "🔍 Deep Review"])
 
-        with tabs[0]:
-            st.subheader(f"Model: {tool}")
-            render_model(tool, iv, mv, dv, beta_xm, beta_my, beta_xy)
-            
-            # Tabel ringkasan yang juga adaptif
-            if "SEM" in tool:
-                res_data = {"Path": [f"{iv}→{mv}", f"{mv}→{dv}", f"{iv}→{dv}"], "Coeff": [beta_xm, beta_my, beta_xy]}
-            else:
-                res_data = {"Variable": [iv], "Impact on": [dv], "Value": [beta_xy if "Regression" in tool else t_value]}
-            st.table(pd.DataFrame(res_data))
+    with tab1:
+        st.subheader("Statistical Diagnostic")
+        c_a, c_b = st.columns(2)
+        
+        with c_a:
+            st.write("**Model Fit Status**")
+            fit_data = pd.DataFrame({
+                "Index": ["SRMR", "RMSEA", "CFI"],
+                "Result": [srmr, rmsea, cfi],
+                "Conclusion": [
+                    "✅ Fit" if srmr < 0.08 else "❌ Poor",
+                    "✅ Fit" if rmsea < 0.06 else "❌ Poor",
+                    "✅ Fit" if cfi > 0.90 else "❌ Good"
+                ]
+            })
+            st.table(fit_data)
 
-        with tabs[1]:
-            with st.spinner("Drafting IMRAD..."):
-                prompt = f"Write a Scopus Q1 draft. Tool: {tool}. Vars: X={iv}, M={mv}, Y={dv}. Values: {beta_xm}, {beta_my}, {beta_xy}. Standard: Elsevier."
-                res = safe_generate(model_instance, prompt)
-                if res: st.code(res.text, language="markdown")
+        with c_b:
+            st.write("**Validity Check**")
+            # Cek apakah AVE rata-rata memenuhi syarat
+            ave_check = "✅ Valid" if edited_validity["AVE (Ideal > 0.5)"].mean() > 0.5 else "⚠️ Low Validity"
+            st.metric("Convergent Validity Status", ave_check)
+            st.caption("AVE > 0.5 menunjukkan indikator mampu menjelaskan variabel laten dengan baik.")
 
-        with tabs[2]:
-            st.info("Fitur Deep Review (Analisis DOI) sedang aktif...")
-            # Masukkan prompt ekstraksi tabel CSV # Bapak di sini
+    with tab2:
+        with st.spinner("Writing Results & Discussion..."):
+            # Prompt yang lebih teknis sesuai dokumen PDF
+            prompt = f"""
+            Write a professional SEM Results section for a Scopus Q1 journal.
+            Data: 
+            - Fit: SRMR={srmr}, RMSEA={rmsea}, CFI={cfi}.
+            - Validity: {edited_validity.to_string()}.
+            - Paths: {edited_path.to_string()}.
+            Style: Elsevier. Mention that validity meets Fornell-Larcker criteria.
+            """
+            res = model.generate_content(prompt)
+            st.code(res.text, language="markdown")
 
-        with tabs[3]:
-            res = safe_generate(model_instance, f"Format DOI to APA 7: {doi_list}")
-            if res: st.code(res.text, language="text")
+    with tab3:
+        # Integrasi 5 Tabel CSV # Bapak
+        deep_prompt = f"Analyze DOIs: {doi_list}. Use '#' separator for 5 Tables (Review, Path, Rec, Def, Quest)."
+        res_deep = model.generate_content(deep_prompt)
+        st.code(res_deep.text, language="text")
 
 st.divider()
-st.caption("Adaptive Research Engine | AI Edition")
+st.caption("Professional SEM Suite | Nick Shryane Standard | Optimized for Q1 Publication")
