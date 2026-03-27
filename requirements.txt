@@ -10,3 +10,12 @@ scipy
 scikit-learn
 graphviz
 openpyxl
+streamlit
+google-generativeai
+pandas
+numpy
+scipy
+scikit-learn
+graphviz
+openpyxl
+python-docx
