@@ -6,9 +6,9 @@ import time
 from google.api_core import exceptions
 
 # --- 1. KONFIGURASI HALAMAN ---
-st.set_page_config(page_title="Q1 Research Pro: Deep Reviewer", layout="wide")
+st.set_page_config(page_title="Q1 Research Pro: Copy Ready", layout="wide")
 
-# --- 2. ENGINE INITIALIZATION ---
+# --- 2. ENGINE INITIALIZATION (ANTI-ERROR 404) ---
 def initialize_engine():
     try:
         available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
@@ -23,7 +23,7 @@ def safe_generate(model, prompt):
         try:
             return model.generate_content(prompt)
         except exceptions.ResourceExhausted:
-            time.sleep(15)
+            time.sleep(12)
         except Exception:
             break
     return None
@@ -36,90 +36,80 @@ if "GEMINI_API_KEY" in st.secrets:
         st.error("Gagal memuat API.")
         st.stop()
 else:
-    st.error("❌ API Key missing di Streamlit Secrets!")
+    st.error("❌ API Key missing!")
     st.stop()
 
 # --- 4. UI SIDEBAR ---
 with st.sidebar:
     st.title("🛡️ Research Guard")
-    st.success(f"Model: **{active_model_name}**")
-    st.info("💡 Semua tabel menggunakan separator '#' tanpa spasi dan tanpa tanda petik untuk kemudahan copy-paste ke Excel.")
+    st.success(f"Active: **{active_model_name}**")
+    st.info("💡 Gunakan ikon di pojok kanan atas kotak teks untuk menyalin draf langsung ke MS Word.")
+    st.write("**Writing Standard:** Elsevier & J. Eichler")
 
 # --- 5. UI INPUT ---
-st.title("🎓 Education AI: Scopus Q1 Deep Reviewer")
+st.title("🎓 Education AI: Scopus Q1 Full Suite")
 
-with st.expander("A. CONFIGURATION & DATA SOURCE", expanded=True):
+with st.expander("A. SETTING VARIABEL & STATISTIK", expanded=True):
     col1, col2 = st.columns(2)
     with col1:
-        iv = st.text_input("Independent Variable(s) (X)", placeholder="e.g., Digital Literacy")
+        iv = st.text_input("Independent Variable(s) (X)", placeholder="e.g., Digital Literacy, ICT Skills")
+        mv = st.text_input("Mediator (M)", placeholder="e.g., Self-Efficacy")
         dv = st.text_input("Dependent Variable (Y)", placeholder="e.g., Student Engagement")
-        tool = st.selectbox("Alat Statistik Utama", ["PLS-SEM (SmartPLS)", "CB-SEM (AMOS)", "Multiple Regression", "ANOVA", "T-Test"])
     with col2:
-        uploaded_file = st.file_uploader("Unggah Olah Data Excel (.xlsx)", type=["xlsx"])
-        doi_input = st.text_area("Input Daftar DOI (Pisahkan dengan koma)", placeholder="10.1016/j.compedu.2023..., 10.1111/jcal...")
+        tool = st.selectbox("Alat Statistik", ["PLS-SEM (SmartPLS)", "CB-SEM (AMOS)", "Multiple Regression", "ANOVA", "T-Test"])
 
-# --- 6. PROMPT BUILDER (LOGIKA EKSTRAKSI) ---
-def get_extraction_prompt(dois):
-    return f"""
-    Based on these DOIs: {dois}. 
-    Analyze each article deeply and provide 5 separate tables using '#' as separator. 
-    Strict Rules: No quotes ("), No underscores, No spaces before/after #. Language: English (except translations).
-
-    1. TABLE REVIEW: 
-    Columns: DOI#Novelty#Goal#Context#Limitation#Future Recommendation#Grand Theory#Method (Quant/Qual)#Dominant Analysis#Data Collection#Country#Software#Country Type#Debates#Finding#ItemKuesioner(1/0).
+with st.expander("B. DATA SOURCE & REFERENCES"):
+    uploaded_file = st.file_uploader("Unggah Hasil (.xlsx)", type=["xlsx"])
+    data_str = ""
+    if uploaded_file:
+        df = pd.read_excel(uploaded_file)
+        data_str = df.to_string()
     
-    2. PATH HYPOTHESIS:
-    Columns: FileName#DOI#iv#dv#t-test#target#jumlah responden#negara#jenis negara#konteks#theory#kesimpulan(1/0). 
-    (One hypothesis per row).
+    ref_style = st.radio("Format Referensi", ["APA 7th Edition", "Harvard"], horizontal=True)
+    doi_list = st.text_area("Input DOI (Pisahkan dengan koma)", key="doi_input")
 
-    3. RECOMMENDED VARIABLES:
-    Columns: doi#detail rekomendasi#nama variabel utama.
-    (One variable per row).
-
-    4. DEFINITION REVIEW:
-    Columns: DOI#Variable#Definition#Dimension#Key Element#Supporting Factor#Novelty#Cronbach Alpha.
-
-    5. QUESTIONNAIRE REVIEW:
-    Columns: DOI#Variable Name#English Item#Indonesian Translation#Item Number#Loading Factor.
-    """
-
-# --- 7. EKSEKUSI ---
-if st.button("🚀 START DEEP ARTICLE ANALYSIS"):
-    if not doi_input:
-        st.warning("Mohon masukkan daftar DOI.")
+# --- 6. EKSEKUSI ---
+if st.button("🚀 EXECUTE FULL RESEARCH SUITE"):
+    if not doi_list:
+        st.warning("Mohon masukkan DOI rujukan.")
     else:
-        tabs = st.tabs(["🔍 Deep Article Review", "📝 IMRAD Draft", "📊 Stats Interpretation", "📚 References"])
+        context = f"Vars: X={iv}, M={mv}, Y={dv} | Tool: {tool} | Data: {data_str} | DOI: {doi_list}"
+        tabs = st.tabs(["📊 Statistics", "📝 IMRAD Draft", "📚 Verified References"])
 
         with tabs[0]:
-            with st.spinner("Extracting Deep Review Data..."):
-                deep_prompt = get_extraction_prompt(doi_input)
-                res_deep = safe_generate(model_instance, deep_prompt)
-                if res_deep:
-                    st.subheader("Data Extraction (CSV # Separator)")
-                    st.code(res_deep.text, language="text")
-                    st.download_button("Download Full Review (.txt)", res_deep.text, file_name="Deep_Review_Research.txt")
+            with st.spinner("Analyzing stats..."):
+                res = safe_generate(model_instance, f"Interpret these statistics: {data_str} for {tool}.")
+                if res:
+                    st.subheader("Statistical Interpretation")
+                    st.code(res.text, language="markdown") # Menggunakan st.code agar bisa di-copy
 
         with tabs[1]:
-            with st.spinner("Generating IMRAD..."):
-                imrad_prompt = f"Write a Scopus Q1 article draft. Context: {iv} to {dv} using {tool}. Use DOIs: {doi_input}. Elsevier standard, no contractions."
-                res_imrad = safe_generate(model_instance, imrad_prompt)
-                if res_imrad:
+            with st.spinner("Drafting Q1 Article..."):
+                prompt = f"""
+                Write a Scopus Q1 article draft. Context: {context}.
+                STRICT RULE: Only use provided variables and DOIs. No hallucination.
+                Style: Elsevier Standard (Active voice, no contractions).
+                """
+                res = safe_generate(model_instance, prompt)
+                if res:
                     st.subheader("IMRAD Article Draft")
-                    st.code(res_imrad.text, language="markdown")
+                    # Fitur salin otomatis via st.code
+                    st.code(res.text, language="markdown")
+                    st.download_button("Download Draft (.txt)", res.text, file_name="Draft_Artikel_Q1.txt")
 
         with tabs[2]:
-            with st.spinner("Analyzing statistics..."):
-                if uploaded_file:
-                    df = pd.read_excel(uploaded_file)
-                    res_stat = safe_generate(model_instance, f"Interpret this data: {df.to_string()} for {tool}.")
-                    if res_stat: st.code(res_stat.text, language="text")
-                else:
-                    st.info("Unggah file Excel untuk melihat analisis statistik.")
-
-        with tabs[3]:
-            with st.spinner("Finalizing References..."):
-                ref_res = safe_generate(model_instance, f"Format these DOIs into APA 7th: {doi_input}. No hallucinations.")
-                if ref_res: st.code(ref_res.text, language="text")
+            with st.spinner("Formatting references..."):
+                ref_prompt = f"""
+                Format these DOIs into {ref_style}: {doi_list}.
+                STRICT: DO NOT HALLUCINATE. If DOI is unknown, return [VERIFY DOI: xxx].
+                Sort alphabetically.
+                """
+                res = safe_generate(model_instance, ref_prompt)
+                if res:
+                    st.subheader(f"Reference List ({ref_style})")
+                    # Fitur salin otomatis via st.code
+                    st.code(res.text, language="text")
+                    st.download_button("Download References (.txt)", res.text, file_name="References.txt")
 
 st.divider()
-st.caption("Anti-Hallucination & Deep Extraction Engine | Standard: Elsevier & J. Eichler")
+st.caption("Anti-Hallucination Engine | Powered by Gemini 3 Flash")
