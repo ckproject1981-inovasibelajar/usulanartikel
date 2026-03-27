@@ -23,6 +23,7 @@ st.markdown("""
     .stButton>button { width: 100%; border-radius: 5px; height: 3em; background-color: #007bff; color: white; }
     .stTabs [data-baseweb="tab-list"] { gap: 24px; }
     .stTabs [data-baseweb="tab"] { height: 50px; white-space: pre-wrap; background-color: #f0f2f6; border-radius: 5px; }
+    .guide-box { padding: 10px; background-color: #e3f2fd; border-radius: 5px; border-left: 5px solid #2196f3; margin-bottom: 10px; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -40,15 +41,28 @@ else:
     st.error("❌ API Key missing! Check your streamlit secrets.")
     st.stop()
 
-# --- 2. ADVANCED DYNAMIC STATS FUNCTIONS ---
+# --- 2. TEMPLATE GENERATOR ---
+def generate_dynamic_dummy():
+    rows = 100
+    data = {}
+    for var in ['X1', 'M1', 'Y1']:
+        base = np.random.randint(2, 5, rows)
+        for i in range(1, 4):
+            noise = np.random.normal(0, 0.4, rows)
+            data[f'{var}_{i}'] = np.clip(base + noise, 1, 5).round()
+    df_dummy = pd.DataFrame(data)
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df_dummy.to_excel(writer, index=False)
+    return output.getvalue()
 
+# --- 3. STATS FUNCTIONS ---
 def calculate_measurement_model(df, var_codes):
     results = []
     avg_scores = pd.DataFrame()
     for code in var_codes:
         cols = [c for c in df.columns if c.startswith(code)]
         if cols:
-            # Loadings & Reliability logic
             loadings = [stats.pearsonr(df[col], df[cols].mean(axis=1))[0] for col in cols]
             ave = sum([l**2 for l in loadings]) / len(cols)
             cr = (sum(loadings)**2) / (sum(loadings)**2 + sum([1 - l**2 for l in loadings]))
@@ -81,12 +95,11 @@ def calculate_htmt(df, var_codes):
 
 def perform_bootstrapping(df_avg, x_list, m_list, y_list):
     boot_results = []
-    # Loop untuk setiap target (Mediator & Dependen)
     targets = m_list + y_list
     for target in targets:
         if target in y_list:
             preds = [v for v in x_list + m_list if v in df_avg.columns and v != target]
-        else: # Untuk Mediator
+        else:
             preds = [v for v in x_list if v in df_avg.columns and v != target]
             
         if not preds: continue
@@ -110,24 +123,42 @@ def perform_bootstrapping(df_avg, x_list, m_list, y_list):
             })
     return pd.DataFrame(boot_results)
 
-# --- 3. UI LAYOUT ---
+# --- 4. UI LAYOUT ---
 st.image("https://i.ibb.co.com/23N3kpBY/Logo-DLI.png", width=160)
 st.title("🎓 SEM Dynamic Research Assistant")
-st.caption("Auto-Detect Multi-Variable Engine | Digital Learning Institute 2026")
+st.caption("Standardized for Q1 Journal Submissions | Digital Learning Institute 2026")
 
 with st.sidebar:
     st.header("📂 Data Center")
+    st.download_button("📥 Download Excel Template", generate_dynamic_dummy(), "template_research.xlsx")
+    
+    with st.expander("📖 Petunjuk Penamaan Variabel"):
+        st.markdown("""
+        Agar sistem dapat mendeteksi variabel secara otomatis, ikuti format berikut:
+        
+        1. **Format Kolom:** `NamaVariabel_Indikator`
+        2. **Contoh:** - `X1_1`, `X1_2`, `X1_3` (Variabel X1 dengan 3 pernyataan)
+           - `MOTIV_1`, `MOTIV_2` (Variabel Motivasi)
+        3. **Gunakan Underscore (_):** Karakter pemisah harus berupa garis bawah.
+        4. **Skala Data:** Gunakan angka (misal Likert 1-5).
+        5. **Satu File:** Pastikan semua variabel (X, M, Y) berada dalam satu sheet yang sama.
+        """)
+    
+    st.divider()
     uploaded_file = st.file_uploader("Unggah Dataset (.xlsx)", type=["xlsx"])
     st.divider()
-    st.write("**Standard Q1 Thresholds:**")
+    st.write("**Threshold Target:**")
     st.caption("AVE > 0.5 | CR > 0.7 | HTMT < 0.85")
 
+# --- 5. MAIN LOGIC ---
 if uploaded_file:
     df_raw = pd.read_excel(uploaded_file).ffill().bfill()
+    prefixes = sorted(list(set([c.split('_')[0] for c in df_raw.columns if '_' in c])))
     
-    # Auto-detection prefixes
-    prefixes = sorted(list(set([c.split('_')[0] for c in df_raw.columns])))
-    
+    if not prefixes:
+        st.error("❌ Format kolom salah! Gunakan format 'Prefix_Angka' (contoh: X1_1).")
+        st.stop()
+
     st.subheader("Model Configuration")
     c1, c2, c3 = st.columns(3)
     with c1: vx = st.multiselect("Independen (X)", prefixes, default=[prefixes[0]] if prefixes else [])
@@ -164,11 +195,9 @@ if uploaded_file:
             with cd:
                 dot = graphviz.Digraph()
                 dot.attr(rankdir='LR')
-                # Nodes
                 for v in active_vars:
                     shape = 'ellipse' if v in vy else 'box'
                     dot.node(v, v, shape=shape)
-                # Dynamic Edges
                 for x in vx:
                     for m in vm: dot.edge(x, m, label="a")
                     for y in vy: dot.edge(x, y, label="c'", style="dashed")
@@ -183,7 +212,7 @@ if uploaded_file:
             if st.button("🚀 Generate Q1 Manuscript"):
                 with st.spinner("AI sedang merangkai narasi akademik..."):
                     stats_info = f"AVE/CR: {q_df.to_string()}, HTMT: {htmt_df.to_string()}, Paths: {boot_df.to_string()}"
-                    prompt = f"Tuliskan draf hasil dan pembahasan artikel jurnal Q1 berdasarkan data: {stats_info}. Fokus pada validitas HTMT dan efek mediasi. Gunakan gaya bahasa akademik yang sangat formal. Bahasa Indonesia."
+                    prompt = f"Tuliskan draf hasil dan pembahasan artikel jurnal Q1 berdasarkan data: {stats_info}. Fokus pada validitas HTMT dan efek mediasi. Bahasa Indonesia."
                     result = model.generate_content(prompt).text
                     st.markdown(result)
                     
@@ -194,9 +223,9 @@ if uploaded_file:
                     doc.save(bio)
                     st.download_button("📝 Download Manuscript", bio.getvalue(), "Manuscript_SEM_Pro.docx")
     else:
-        st.warning("Pilih setidaknya satu variabel untuk memulai analisis.")
+        st.warning("Pilih variabel di sidebar/konfigurasi untuk memulai analisis.")
 else:
-    st.info("Silakan unggah dataset Excel Anda untuk memulai. Pastikan format kolom menggunakan prefix (Contoh: X1_1, X1_2, M1_1, dst).")
+    st.info("Silakan unduh template di sidebar atau unggah data Anda untuk memulai.")
 
 st.divider()
-st.caption(f"Finalized Suite Ver 6.0 (Dynamic) | Developed by Citra Kurniawan - 2026")
+st.caption(f"Finalized Suite Ver 6.2 (Dynamic + Guide) | Developed by Citra Kurniawan - 2026")
