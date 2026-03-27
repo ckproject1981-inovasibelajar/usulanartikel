@@ -6,25 +6,41 @@ import re
 # --- 1. KONFIGURASI HALAMAN ---
 st.set_page_config(page_title="Q1 Research Pro: End-to-End Suite", layout="wide")
 
+# --- 2. FUNGSI LOGIKA AI (STABILIZER) ---
 def get_best_model():
     try:
-        models = genai.list_models()
-        valid_models = [m.name for m in models if 'generateContent' in m.supported_generation_methods]
-        preferred = ['gemini-1.5-pro', 'gemini-1.5-flash']
-        for p in preferred:
-            match = next((m for m in valid_models if p in m), None)
-            if match: return match
+        # Mengambil daftar model yang tersedia untuk API Key tersebut
+        available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+        
+        # Daftar model target dengan urutan prioritas (dengan prefix models/)
+        target_models = [
+            'models/gemini-1.5-pro', 
+            'models/gemini-1.5-flash', 
+            'models/gemini-pro'
+        ]
+        
+        # Mencari kecocokan antara model yang tersedia dan model target
+        for target in target_models:
+            if target in available_models:
+                return target
+        
+        # Fallback jika tidak ada yang cocok
+        return available_models[0] if available_models else "models/gemini-1.5-flash"
+    except Exception:
+        # Fallback hardcoded jika list_models gagal (umum di beberapa environment)
         return "models/gemini-1.5-flash"
-    except: return "models/gemini-1.5-flash"
 
+# --- 3. KONEKSI KE API VIA SECRETS ---
 if "GEMINI_API_KEY" in st.secrets:
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-    model_instance = genai.GenerativeModel(get_best_model())
+    # Inisialisasi model secara global agar konsisten
+    SELECTED_MODEL_NAME = get_best_model()
+    model_instance = genai.GenerativeModel(SELECTED_MODEL_NAME)
 else:
-    st.error("❌ API Key missing!")
+    st.error("❌ API Key missing! Harap masukkan GEMINI_API_KEY di Streamlit Secrets.")
     st.stop()
 
-# --- 2. MODUL ACADEMIC GUARD & FORMATTER ---
+# --- 4. MODUL ACADEMIC GUARD & FORMATTER ---
 def check_academic_consistency(text):
     colloquialisms = {
         r"\bcan't\b": "cannot", r"\bdon't\b": "do not", r"\bisn't\b": "is not",
@@ -37,21 +53,20 @@ def check_academic_consistency(text):
             warnings.append(f"⚠️ Gunakan '{replacement}' alih-alih '{pattern.strip(r'|b')}'.")
     return warnings
 
-# --- 3. UI SIDEBAR ---
+# --- 5. UI SIDEBAR ---
 with st.sidebar:
     st.title("🛡️ Research Engine")
-    st.info("Status: **Production Ready**")
-    with st.expander("ℹ️ WORKFLOW LENGKAP", expanded=True):
+    st.info(f"Model Aktif: **{SELECTED_MODEL_NAME}**")
+    with st.expander("ℹ️ PETUNJUK PENYEMPURNAAN", expanded=True):
         st.markdown("""
-        1. **Config:** Pilih alat statistik & variabel.
-        2. **Data:** Unggah Excel hasil olah data.
-        3. **Drafting:** Generate IMRAD + Gap + Hipotesis.
-        4. **Audit:** Cek Grammar & Konsistensi.
-        5. **Finalize:** Format Daftar Pustaka otomatis.
+        * **Multi-Variabel:** Support input X, M, Y jamak (koma).
+        * **Kategori Lengkap:** Mencakup SEM, Komparatif, hingga Non-Parametrik.
+        * **Grammar Guard:** Deteksi otomatis gaya bahasa informal (Elsevier Standard).
+        * **Reference Formatter:** Otomasi APA/Harvard dari DOI.
         """)
-    st.write("**Compliance:** Elsevier & J. Eichler Standards")
+    st.write("**Standards:** Elsevier & J. Eichler")
 
-# --- 4. UI INPUT ---
+# --- 6. UI INPUT ---
 st.title("🎓 Education AI: Scopus Q1 End-to-End Builder")
 
 with st.expander("A. STATISTICAL & VARIABLE SETUP", expanded=True):
@@ -75,9 +90,9 @@ with st.expander("B. RESEARCH DATA & REFERENCES"):
             data_str = df.to_string()
     with col_b:
         ref_style = st.radio("Pilih Format Referensi", ["APA 7th Edition", "Harvard"], horizontal=True)
-        doi_list = st.text_area("Input DOI (Pisahkan dengan koma)", key="doi_input", help="AI akan menyusun daftar pustaka dari DOI ini.")
+        doi_list = st.text_area("Input DOI (Pisahkan dengan koma)", key="doi_input")
 
-# --- 5. EKSEKUSI ---
+# --- 7. EKSEKUSI ---
 if st.button("🚀 EXECUTE FULL RESEARCH SUITE"):
     if not doi_list:
         st.warning("Input DOI diperlukan untuk analisis Gap dan Referensi.")
@@ -89,13 +104,16 @@ if st.button("🚀 EXECUTE FULL RESEARCH SUITE"):
         # TAB 1: Analisis Statistik
         with tabs[0]:
             with st.spinner("Analyzing stats..."):
-                res_stat = model_instance.generate_content(f"Provide professional interpretation for {tool} based on: {data_str}. Academic English.")
-                st.markdown(res_stat.text)
+                try:
+                    res_stat = model_instance.generate_content(f"Provide professional interpretation for {tool} based on: {data_str}. Focus on p-values and significance. Academic English.")
+                    st.markdown(res_stat.text)
+                except Exception as e:
+                    st.error(f"Error pada Analisis: {e}")
 
         # TAB 2: Draf Artikel
         with tabs[1]:
             with st.spinner("Drafting IMRAD..."):
-                imrad_prompt = f"Write a Scopus Q1 Education article draft. Context: {context}. Include Research Gap & Hypotheses. Elsevier Style (Active voice, no contractions)."
+                imrad_prompt = f"Write a Scopus Q1 Education article draft. Context: {context}. Include Research Gap from DOIs and Hypotheses (H1, H2, etc). Elsevier Style (Active voice, no contractions)."
                 res_imrad = model_instance.generate_content(imrad_prompt)
                 st.session_state['current_draft'] = res_imrad.text
                 st.markdown(res_imrad.text)
@@ -112,17 +130,10 @@ if st.button("🚀 EXECUTE FULL RESEARCH SUITE"):
                         st.markdown(refined.text)
                 else: st.success("✅ Clean of colloquialisms!")
 
-        # TAB 4: Reference Formatter (FITUR BARU)
+        # TAB 4: Reference Formatter
         with tabs[3]:
             with st.spinner(f"Formatting references in {ref_style}..."):
-                ref_prompt = f"""
-                Based on these DOIs: {doi_list}, generate a formal Reference List in {ref_style} format. 
-                Ensure:
-                - Alphabetical order.
-                - Correct italics for journal names and volumes.
-                - Consistency in DOI presentation.
-                - No placeholders, use actual citation data from your knowledge of these DOIs.
-                """
+                ref_prompt = f"Based on these DOIs: {doi_list}, generate a formal Reference List in {ref_style} format. Alphabetical order. Academic style."
                 res_refs = model_instance.generate_content(ref_prompt)
                 st.markdown(f"### References ({ref_style})")
                 st.code(res_refs.text, language="text")
