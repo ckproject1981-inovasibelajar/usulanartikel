@@ -2,181 +2,142 @@ import streamlit as st
 import google.generativeai as genai
 import pandas as pd
 import numpy as np
-from scipy import stats
-from sklearn.linear_model import LinearRegression
-import graphviz # Pustaka Tambahan untuk Visualisasi
+import io
+try:
+    from scipy import stats
+    from sklearn.linear_model import LinearRegression
+    import graphviz
+except ImportError:
+    st.error("⚠️ Pustaka belum lengkap. Pastikan file requirements.txt dan packages.txt sudah ada di GitHub.")
 
 # --- 1. CONFIG & ENGINE ---
 st.set_page_config(page_title="Q1 SEM Ultimate Pro", layout="wide", page_icon="🎓")
 
-def initialize_engine():
-    try:
-        available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-        selected = next((t for t in ['models/gemini-1.5-flash', 'models/gemini-1.5-pro'] if t in available_models), available_models[0])
-        return genai.GenerativeModel(selected)
-    except: return None
-
 if "GEMINI_API_KEY" in st.secrets:
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-    model = initialize_engine()
+    # Inisialisasi Model Gemini
+    model = genai.GenerativeModel('gemini-1.5-flash')
 else:
-    st.error("❌ API Key missing! Check Streamlit Secrets.")
+    st.error("❌ API Key missing!")
     st.stop()
 
-# --- 2. CORE STATISTICAL FUNCTIONS ---
+# --- 2. FUNGSI GENERATE DUMMY EXCEL ---
+def generate_dummy_excel():
+    rows = 50
+    data = {}
+    # Membuat korelasi buatan agar hasil statistik bagus
+    base_x = np.random.randint(3, 6, rows)
+    for i in range(1, 6):
+        data[f'X{i}'] = np.clip(base_x + np.random.normal(0, 0.5, rows), 1, 5).round()
+    
+    base_m = base_x * 0.7 + np.random.normal(0, 0.5, rows)
+    for i in range(1, 6):
+        data[f'M{i}'] = np.clip(base_m + np.random.normal(0, 0.5, rows), 1, 5).round()
+        
+    base_y = base_m * 0.8 + np.random.normal(0, 0.5, rows)
+    for i in range(1, 6):
+        data[f'Y{i}'] = np.clip(base_y + np.random.normal(0, 0.5, rows), 1, 5).round()
+    
+    df_dummy = pd.DataFrame(data)
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df_dummy.to_excel(writer, index=False)
+    return output.getvalue()
 
-def calculate_reliability_vif(df, var_codes):
+# --- 3. CORE ANALYTICS ---
+def run_analysis(df, x_code, m_code, y_code):
+    codes = [x_code, m_code, y_code]
     avg_scores = pd.DataFrame()
-    vif_data = []
-    # 1. Pre-calculate Avg Scores
-    for code in var_codes:
-        cols = [col for col in df.columns if col.startswith(code)]
+    q_data = []
+    
+    for c in codes:
+        cols = [col for col in df.columns if col.startswith(c)]
         if cols:
-            avg_scores[code] = df[cols].mean(axis=1)
-    
-    # 2. Calculate VIF & Alpha
-    for var in avg_scores.columns:
-        y = avg_scores[var]
-        X = avg_scores.drop(columns=[var])
-        cols = [col for col in df.columns if col.startswith(var)]
-        k = len(cols)
-        
-        # Simple Alpha Proxy
-        alpha = (k / (k - 1)) * (1 - (df[cols].var().sum() / df[cols].sum(axis=1).var())) if k > 1 else 1.0
-        
-        # Simple VIF
-        if not X.empty:
-            r_sq = LinearRegression().fit(X, y).score(X, y)
-            vif = 1 / (1 - r_sq) if r_sq < 1 else 10
-        else:
-            vif = 1.0
-            
-        vif_data.append({"Variable": var, "Alpha (>0.7)": round(alpha, 3), "VIF (<5.0)": round(vif, 3)})
-            
-    return pd.DataFrame(vif_data), avg_scores
+            avg_scores[c] = df[cols].mean(axis=1)
+            # Alpha
+            k = len(cols)
+            alpha = (k/(k-1)) * (1-(df[cols].var().sum()/df[cols].sum(axis=1).var())) if k > 1 else 1.0
+            q_data.append({"Variable": c, "Alpha": round(alpha, 3)})
 
-def calculate_mediation_paths(df_avg, x, m, y):
-    try:
-        # Path a (X -> M)
-        slope_a, _, _, _, _ = stats.linregress(df_avg[x], df_avg[m])
-        # Path b & c' (M & X -> Y)
-        reg_y = LinearRegression().fit(df_avg[[x, m]], df_avg[y])
-        path_b = reg_y.coef_[1]
-        path_c_prime = reg_y.coef_[0]
-        indirect = slope_a * path_b
-        
-        return {
-            "a": round(slope_a, 3),
-            "b": round(path_b, 3),
-            "c_prime": round(path_c_prime, 3),
-            "Indirect": round(indirect, 3),
-            "Total": round(path_c_prime + indirect, 3),
-            "Status": "Partial" if abs(path_c_prime) > 0.1 else "Full"
-        }
-    except: return None
+    # VIF
+    for c in avg_scores.columns:
+        target = avg_scores[c]
+        feat = avg_scores.drop(columns=[c])
+        r2 = LinearRegression().fit(feat, target).score(feat, target)
+        vif = 1/(1-r2) if r2 < 1 else 10
+        next(i for i in q_data if i["Variable"] == c)["VIF"] = round(vif, 3)
 
-# --- 3. FUNGSI VISUALISASI JALUR (GRAPHVIZ) ---
-
-def draw_path_diagram(x, m, y, paths):
-    """Membuat Diagram Jalur Mediasi Otomatis"""
-    dot = graphviz.Digraph(comment='SEM Path Model')
-    dot.attr(rankdir='LR') # Left to Right
+    # Path
+    slope_a, _, _, _, _ = stats.linregress(avg_scores[x_code], avg_scores[m_code])
+    reg_final = LinearRegression().fit(avg_scores[[x_code, m_code]], avg_scores[y_code])
+    path_b, path_c_p = reg_final.coef_[1], reg_final.coef_[0]
     
-    # Nodes (Variabel Laten)
-    dot.node('X', x, shape='ellipse', style='filled', fillcolor='#E1F5FE')
-    dot.node('M', m, shape='ellipse', style='filled', fillcolor='#E8F5E9')
-    dot.node('Y', y, shape='ellipse', style='filled', fillcolor='#FFFDE7')
-    
-    # Edges (Jalur Koefisien)
-    # Jalur Langsung (solid)
-    dot.edge('X', 'M', label=f'a={paths["a"]}', color='#1565C0')
-    dot.edge('M', 'Y', label=f'b={paths["b"]}', color='#2E7D32')
-    # Jalur Tidak Langsung (dotted/dashed untuk c')
-    dot.edge('X', 'Y', label=f"c'={paths['c_prime']}", style='dashed', color='#F9A825')
-    
-    st.graphviz_chart(dot)
+    return pd.DataFrame(q_data), {
+        "a": round(slope_a, 3), "b": round(path_b, 3), "c_prime": round(path_c_p, 3),
+        "ind": round(slope_a * path_b, 3), "tot": round(path_c_p + (slope_a * path_b), 3)
+    }
 
 # --- 4. UI LAYOUT ---
-
-# LOGO DI ATAS JUDUL
-st.image("https://i.ibb.co.com/23N3kpBY/Logo-DLI.png", width=150)
-st.title("🎓 Q1 SEM Ultimate: Path, Mediation & Visualization")
-st.caption("Digital Learning Institute | Manchester Framework (Nick Shryane Standard)")
+st.image("https://i.ibb.co.com/23N3kpBY/Logo-DLI.png", width=160)
+st.title("🎓 Q1 SEM Ultimate: Analytics & Visualization")
 
 with st.sidebar:
     st.image("https://i.ibb.co.com/23N3kpBY/Logo-DLI.png", use_container_width=True)
     st.header("📂 Data Center")
-    uploaded_file = st.file_uploader("Unggah Data Mentah (.xlsx)", type=["xlsx"])
+    
+    # Tombol Download Dummy
+    st.write("Belum punya data?")
+    dummy_file = generate_dummy_excel()
+    st.download_button("📥 Download Contoh Excel", dummy_file, "dummy_data_sem.xlsx")
+    
     st.divider()
-    st.markdown("### Quality Control")
-    st.info("Aplikasi menangani Missing Data & Outlier otomatis.")
-    st.divider()
-    st.caption("Developed by Citra Kurniawan - 2026")
+    uploaded_file = st.file_uploader("Unggah File Anda (.xlsx)", type=["xlsx"])
 
 if uploaded_file:
-    # Membaca data dan menangani Missing Data (Mean Imputation)
     df_raw = pd.read_excel(uploaded_file)
     df = df_raw.fillna(df_raw.mean(numeric_only=True))
     
-    st.subheader("1. Konfigurasi Model Mediasi")
-    st.write("Masukkan kode variabel Anda (e.g., DL, SE, EN) dan tentukan alur mediasi.")
+    st.subheader("1. Konfigurasi Variabel")
+    st.info("Petunjuk: Pastikan nama kolom di Excel diawali dengan huruf variabel (contoh: X1, X2... M1, M2...)")
     
-    var_input = st.text_input("Daftar Kode Variabel", value="DL, SE, EN")
-    var_codes = [c.strip() for c in var_input.split(",")]
+    col1, col2, col3 = st.columns(3)
+    vx = col1.text_input("Variabel X", "X")
+    vm = col2.text_input("Variabel M", "M")
+    vy = col3.text_input("Variabel Y", "Y")
     
-    col_x, col_m, col_y = st.columns(3)
-    x_var = col_x.selectbox("Pilih X (Independen)", var_codes, index=0)
-    m_var = col_m.selectbox("Pilih M (Mediator)", var_codes, index=1)
-    y_var = col_y.selectbox("Pilih Y (Dependen)", var_codes, index=2)
-
-    # PERHITUNGAN DIMULAI
-    vif_df, df_avg = calculate_reliability_vif(df, var_codes)
-    med_res = calculate_mediation_paths(df_avg, x_var, m_var, y_var)
-
-    # DISPLAY QUALITY METRICS
-    st.subheader("2. Quality & Reliability Report")
-    st.table(vif_df)
-
-    if med_res:
-        st.subheader("3. Path Analysis & Visualization")
+    q_df, res = run_analysis(df, vx, vm, vy)
+    
+    st.subheader("2. Reliability (Alpha) & Collinearity (VIF)")
+    st.table(q_df)
+    
+    st.subheader("3. Path Analysis & Diagram")
+    c_vis, c_stat = st.columns([2, 1])
+    
+    with c_vis:
+        dot = graphviz.Digraph(engine='dot')
+        dot.attr(rankdir='LR')
+        dot.node('X', vx, shape='ellipse', style='filled', color='#E1F5FE')
+        dot.node('M', vm, shape='ellipse', style='filled', color='#E8F5E9')
+        dot.node('Y', vy, shape='ellipse', style='filled', color='#FFFDE7')
+        dot.edge('X', 'M', label=f"a={res['a']}")
+        dot.edge('M', 'Y', label=f"b={res['b']}")
+        dot.edge('X', 'Y', label=f"c'={res['c_prime']}", style='dashed')
+        st.graphviz_chart(dot)
         
-        col_vis, col_met = st.columns([2, 1])
-        with col_vis:
-            st.write("**Diagram Jalur Otomatis (a -> b -> c')**")
-            draw_path_diagram(x_var, m_var, y_var, med_res)
-            st.caption("Jalur putus-putus menunjukkan efek langsung (c').")
-            
-        with col_met:
-            st.write("**Koefisien Mediasi**")
-            st.metric("Direct Effect (c')", med_res["c_prime"])
-            st.metric("Indirect Effect (a*b)", med_res["Indirect"])
-            st.metric("Total Effect", med_res["Total"])
-            st.metric("Mediation Type", med_res["Status"])
+    with c_stat:
+        st.metric("Indirect Effect", res['ind'])
+        st.metric("Total Effect", res['tot'])
+        st.write(f"**Status:** {'Partial Mediation' if abs(res['c_prime']) > 0.1 else 'Full Mediation'}")
 
-        # EXECUTION BUTTON
-        st.divider()
-        if st.button("🚀 GENERATE FINAL Q1 MANUSCRIPT"):
-            t1, t2, t3 = st.tabs(["💡 Interpretation", "📝 IMRAD Draft", "🔍 Deep Review"])
-            
-            with t1:
-                st.subheader("Interpretasi Kausal (Shryane Standard)")
-                with st.spinner("Menganalisis koefisien jalur..."):
-                    prompt = f"Interpretasikan hasil SEM: X={x_var}, M={m_var}, Y={y_var}. Path a={med_res['a']}, Path b={med_res['b']}, Direct c'={med_res['c_prime']}. Fokus pada mekanisme mediasi M={m_var}. Bahasa Indonesia akademik."
-                    st.write(model.generate_content(prompt).text)
-            
-            with t2:
-                st.subheader("Draf IMRAD (Elsevier Style)")
-                with st.spinner("Drafting manuscript..."):
-                    prompt_imrad = f"Write Scopus Q1 Results section for mediation model {x_var}->{m_var}->{y_var}. Refer to the provided path coefficients (a, b, c'). Tone: Formal Elsevier."
-                    st.code(model.generate_content(prompt_imrad).text, language="markdown")
-            
-            with t3:
-                st.write("Gunakan fitur ini untuk Deep Review rujukan DOI.")
-    else:
-        st.error("Gagal menghitung mediasi. Pastikan data kolom tersedia.")
+    if st.button("🚀 GENERATE MANUSCRIPT"):
+        t1, t2 = st.tabs(["💡 Interpretasi", "📝 Draf IMRAD"])
+        with t1:
+            st.write(model.generate_content(f"Berikan interpretasi akademik bahasa Indonesia untuk mediasi {vx}->{vm}->{vy} dengan hasil a={res['a']}, b={res['b']}, c'={res['c_prime']}. Gunakan standar Nick Shryane.").text)
+        with t2:
+            st.code(model.generate_content(f"Write Scopus Q1 Results section in English for mediation {vx}->{vm}->{vy}. Include path coefficients: a={res['a']}, b={res['b']}, c'={res['c_prime']}.").text)
 
 else:
-    st.warning("Selamat Datang! Silakan unggah file data mentah (.xlsx) di sidebar untuk memulai analisis.")
+    st.warning("👋 Selamat Datang! Silakan unduh contoh file di sidebar atau unggah file Excel Anda.")
 
 st.divider()
-st.caption("Developed by Citra Kurniawan - 2026 | SEM Causal Suite Ver 3.0 (Graphviz Integrated)")
+st.caption("Finalized Suite Ver 3.2 | Distructive Learning Innovation - @Citra Kurniawan - 2026")
