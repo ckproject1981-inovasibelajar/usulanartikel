@@ -6,50 +6,25 @@ import time
 from google.api_core import exceptions
 
 # --- 1. KONFIGURASI HALAMAN ---
-st.set_page_config(page_title="Q1 Research Pro: Ultra-Stable", layout="wide")
+st.set_page_config(page_title="Q1 Research Pro: Deep Reviewer", layout="wide")
 
-# --- 2. FUNGSI LOGIKA MODEL (ANTI-ERROR 404 & 429) ---
+# --- 2. ENGINE INITIALIZATION ---
 def initialize_engine():
-    """Menginisialisasi model dengan validasi keberadaan model di API"""
     try:
-        # Ambil daftar semua model yang mendukung generateContent
         available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-        
-        # Daftar prioritas (mencoba dengan dan tanpa prefix untuk kompatibilitas)
-        priority_list = [
-            'models/gemini-1.5-flash', 
-            'models/gemini-1.5-pro',
-            'gemini-1.5-flash', 
-            'gemini-1.5-pro'
-        ]
-        
-        selected = None
-        for target in priority_list:
-            if target in available_models:
-                selected = target
-                break
-        
-        # Jika tidak ada yang cocok di list, ambil apa saja yang tersedia pertama kali
-        if not selected and available_models:
-            selected = available_models[0]
-            
-        if not selected:
-            return None, "Tidak ada model Gemini yang ditemukan pada API Key ini."
-            
+        priority_list = ['models/gemini-1.5-flash', 'models/gemini-1.5-pro']
+        selected = next((t for t in priority_list if t in available_models), available_models[0] if available_models else None)
         return genai.GenerativeModel(selected), selected
     except Exception as e:
         return None, str(e)
 
 def safe_generate(model, prompt):
-    """Fungsi eksekusi dengan Retry Logic untuk mengatasi ResourceExhausted (429)"""
     for attempt in range(3):
         try:
             return model.generate_content(prompt)
         except exceptions.ResourceExhausted:
-            st.warning(f"Kuota penuh. Menunggu 12 detik... (Percobaan {attempt+1}/3)")
-            time.sleep(12)
-        except Exception as e:
-            st.error(f"Kesalahan API: {e}")
+            time.sleep(15)
+        except Exception:
             break
     return None
 
@@ -58,95 +33,93 @@ if "GEMINI_API_KEY" in st.secrets:
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
     model_instance, active_model_name = initialize_engine()
     if not model_instance:
-        st.error(f"Gagal Inisialisasi: {active_model_name}")
+        st.error("Gagal memuat API.")
         st.stop()
 else:
-    st.error("❌ API Key tidak ditemukan di Streamlit Secrets!")
+    st.error("❌ API Key missing di Streamlit Secrets!")
     st.stop()
 
-# --- 4. MODUL ACADEMIC GUARD ---
-def check_academic_consistency(text):
-    colloquialisms = {
-        r"\bcan't\b": "cannot", r"\bdon't\b": "do not", r"\bisn't\b": "is not",
-        r"\bget\b": "obtain", r"\bdone\b": "conducted", r"\ba lot of\b": "numerous"
-    }
-    warnings = []
-    for pattern, replacement in colloquialisms.items():
-        if re.search(pattern, text, re.IGNORECASE):
-            warnings.append(f"⚠️ Gunakan '{replacement}' alih-alih '{pattern.strip(r'|b')}'.")
-    return warnings
-
-# --- 5. UI LAYOUT ---
-st.title("🎓 Education AI: Scopus Q1 End-to-End Builder")
-
+# --- 4. UI SIDEBAR ---
 with st.sidebar:
-    st.title("🛡️ Research Engine")
-    st.success(f"Model Aktif: **{active_model_name}**")
-    st.markdown("""
-    **Fitur Terpasang:**
-    - Auto-Model Discovery (Fix 404)
-    - Rate-Limit Handling (Fix 429)
-    - Elsevier Grammar Guard
-    - APA/Harvard Formatter
-    """)
+    st.title("🛡️ Research Guard")
+    st.success(f"Model: **{active_model_name}**")
+    st.info("💡 Semua tabel menggunakan separator '#' tanpa spasi dan tanpa tanda petik untuk kemudahan copy-paste ke Excel.")
 
-# A. Input Variabel & Statistik
-with st.expander("A. STATISTICAL & VARIABLE SETUP", expanded=True):
+# --- 5. UI INPUT ---
+st.title("🎓 Education AI: Scopus Q1 Deep Reviewer")
+
+with st.expander("A. CONFIGURATION & DATA SOURCE", expanded=True):
     col1, col2 = st.columns(2)
     with col1:
-        iv = st.text_input("Independent Variable(s) (X)", placeholder="e.g., Digital Literacy, ICT Skills")
-        mv = st.text_input("Mediator/Moderator (M/Z)", placeholder="e.g., Teacher Self-Efficacy")
+        iv = st.text_input("Independent Variable(s) (X)", placeholder="e.g., Digital Literacy")
         dv = st.text_input("Dependent Variable (Y)", placeholder="e.g., Student Engagement")
+        tool = st.selectbox("Alat Statistik Utama", ["PLS-SEM (SmartPLS)", "CB-SEM (AMOS)", "Multiple Regression", "ANOVA", "T-Test"])
     with col2:
-        tool = st.selectbox("Alat Statistik Spesifik", ["PLS-SEM (SmartPLS)", "CB-SEM (AMOS)", "Multiple Regression", "ANOVA", "T-Test"])
+        uploaded_file = st.file_uploader("Unggah Olah Data Excel (.xlsx)", type=["xlsx"])
+        doi_input = st.text_area("Input Daftar DOI (Pisahkan dengan koma)", placeholder="10.1016/j.compedu.2023..., 10.1111/jcal...")
 
-# B. Data Excel & DOI
-with st.expander("B. DATA SOURCE & REFERENCES"):
-    col_a, col_b = st.columns(2)
-    with col_a:
-        uploaded_file = st.file_uploader("Unggah Hasil Olah Data (.xlsx)", type=["xlsx"])
-        data_str = ""
-        if uploaded_file:
-            df = pd.read_excel(uploaded_file)
-            st.dataframe(df, height=150)
-            data_str = df.to_string()
-    with col_b:
-        ref_style = st.radio("Format Referensi", ["APA 7th Edition", "Harvard"], horizontal=True)
-        doi_list = st.text_area("Input DOI (Pisahkan dengan koma)", key="doi_input")
+# --- 6. PROMPT BUILDER (LOGIKA EKSTRAKSI) ---
+def get_extraction_prompt(dois):
+    return f"""
+    Based on these DOIs: {dois}. 
+    Analyze each article deeply and provide 5 separate tables using '#' as separator. 
+    Strict Rules: No quotes ("), No underscores, No spaces before/after #. Language: English (except translations).
 
-# --- 6. EKSEKUSI ---
-if st.button("🚀 EXECUTE FULL RESEARCH SUITE"):
-    if not doi_list:
-        st.warning("Mohon masukkan DOI pendukung.")
+    1. TABLE REVIEW: 
+    Columns: DOI#Novelty#Goal#Context#Limitation#Future Recommendation#Grand Theory#Method (Quant/Qual)#Dominant Analysis#Data Collection#Country#Software#Country Type#Debates#Finding#ItemKuesioner(1/0).
+    
+    2. PATH HYPOTHESIS:
+    Columns: FileName#DOI#iv#dv#t-test#target#jumlah responden#negara#jenis negara#konteks#theory#kesimpulan(1/0). 
+    (One hypothesis per row).
+
+    3. RECOMMENDED VARIABLES:
+    Columns: doi#detail rekomendasi#nama variabel utama.
+    (One variable per row).
+
+    4. DEFINITION REVIEW:
+    Columns: DOI#Variable#Definition#Dimension#Key Element#Supporting Factor#Novelty#Cronbach Alpha.
+
+    5. QUESTIONNAIRE REVIEW:
+    Columns: DOI#Variable Name#English Item#Indonesian Translation#Item Number#Loading Factor.
+    """
+
+# --- 7. EKSEKUSI ---
+if st.button("🚀 START DEEP ARTICLE ANALYSIS"):
+    if not doi_input:
+        st.warning("Mohon masukkan daftar DOI.")
     else:
-        context = f"Vars: X={iv}, M={mv}, Y={dv} | Tool: {tool} | Data: {data_str} | DOI: {doi_list}"
-        tabs = st.tabs(["📊 Statistics", "📝 IMRAD Draft", "🛡️ Grammar Audit", "📚 References"])
+        tabs = st.tabs(["🔍 Deep Article Review", "📝 IMRAD Draft", "📊 Stats Interpretation", "📚 References"])
 
         with tabs[0]:
-            with st.spinner("Analyzing stats..."):
-                res = safe_generate(model_instance, f"Interpret these statistics professionally: {data_str} using {tool}.")
-                if res: st.markdown(res.text)
+            with st.spinner("Extracting Deep Review Data..."):
+                deep_prompt = get_extraction_prompt(doi_input)
+                res_deep = safe_generate(model_instance, deep_prompt)
+                if res_deep:
+                    st.subheader("Data Extraction (CSV # Separator)")
+                    st.code(res_deep.text, language="text")
+                    st.download_button("Download Full Review (.txt)", res_deep.text, file_name="Deep_Review_Research.txt")
 
         with tabs[1]:
-            with st.spinner("Drafting Q1 Article..."):
-                prompt = f"Write a Scopus Q1 article draft based on Elsevier/Eichler standards. Context: {context}. Include Gap & Hypotheses."
-                res = safe_generate(model_instance, prompt)
-                if res: 
-                    st.session_state['current_draft'] = res.text
-                    st.markdown(res.text)
+            with st.spinner("Generating IMRAD..."):
+                imrad_prompt = f"Write a Scopus Q1 article draft. Context: {iv} to {dv} using {tool}. Use DOIs: {doi_input}. Elsevier standard, no contractions."
+                res_imrad = safe_generate(model_instance, imrad_prompt)
+                if res_imrad:
+                    st.subheader("IMRAD Article Draft")
+                    st.code(res_imrad.text, language="markdown")
 
         with tabs[2]:
-            st.subheader("🛡️ Academic Integrity Check")
-            if 'current_draft' in st.session_state:
-                warnings = check_academic_consistency(st.session_state['current_draft'])
-                if warnings:
-                    for w in warnings: st.warning(w)
-                else: st.success("✅ Naskah bebas dari colloquialism sesuai standar Elsevier.")
+            with st.spinner("Analyzing statistics..."):
+                if uploaded_file:
+                    df = pd.read_excel(uploaded_file)
+                    res_stat = safe_generate(model_instance, f"Interpret this data: {df.to_string()} for {tool}.")
+                    if res_stat: st.code(res_stat.text, language="text")
+                else:
+                    st.info("Unggah file Excel untuk melihat analisis statistik.")
 
         with tabs[3]:
-            with st.spinner("Formatting references..."):
-                res = safe_generate(model_instance, f"Format these DOIs into {ref_style} Reference List: {doi_list}.")
-                if res: st.code(res.text)
+            with st.spinner("Finalizing References..."):
+                ref_res = safe_generate(model_instance, f"Format these DOIs into APA 7th: {doi_input}. No hallucinations.")
+                if ref_res: st.code(ref_res.text, language="text")
 
 st.divider()
-st.caption("Auto-Inisialisasi Aktif | Kompatibel dengan Tier Gratis & Berbayar")
+st.caption("Anti-Hallucination & Deep Extraction Engine | Standard: Elsevier & J. Eichler")
