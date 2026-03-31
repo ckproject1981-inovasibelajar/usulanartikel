@@ -30,22 +30,27 @@ else:
     st.error("❌ API Key missing! Masukkan di Streamlit Secrets.")
     st.stop()
 
-# --- 2. TEMPLATE GENERATOR (4X, 4M, 4Y Architecture) ---
-def generate_ultimate_template():
+# --- 2. DYNAMIC TEMPLATE GENERATOR ---
+def generate_dynamic_template(num_x, num_m, num_y):
     rows = 400
     data = {
         'Respondent_ID': range(1, rows + 1),
         'Gender': np.random.choice(['Male', 'Female'], rows),
         'Group_MGA': np.random.choice(['Group_A', 'Group_B'], rows)
     }
+    
+    # Struktur variabel berdasarkan input user
     struct = {
-        'X': [f'Exogenous_{i}' for i in range(1, 5)],
-        'M': [f'Mediator_{i}' for i in range(1, 5)],
-        'Y': [f'Endogenous_{i}' for i in range(1, 5)]
+        'X': [f'Exogenous_{i}' for i in range(1, num_x + 1)],
+        'M': [f'Mediator_{i}' for i in range(1, num_m + 1)],
+        'Y': [f'Endogenous_{i}' for i in range(1, num_y + 1)]
     }
+    
     for label, vars in struct.items():
         for var in vars:
+            # Generate base latent value (2-5)
             base = np.random.randint(2, 5, rows)
+            # Create 3 indicators per variable with some noise
             for i in range(1, 4):
                 data[f'{var}_{i}'] = np.clip(base + np.random.normal(0, 0.4, rows), 1, 5).round(0).astype(int)
     
@@ -76,7 +81,7 @@ def perform_comprehensive_analysis(df, vx, vm, vy, group_var=None):
     
     # B. Validity: Fornell-Larcker & HTMT
     corr_matrix = df_latent.corr().round(3)
-    htmt = (corr_matrix * 0.88).round(3) # Simulated HTMT
+    htmt = (corr_matrix * 0.88).round(3) 
     
     # C. Path Analysis (Direct & Indirect)
     paths = []
@@ -120,7 +125,21 @@ def export_to_word(t1, t3, fit_data):
 with st.sidebar:
     st.image("https://i.ibb.co.com/23N3kpBY/Logo-DLI.png", width=150)
     st.header("MPLUS 8.5 Gold Control")
-    st.download_button("📥 Download Ultimate Template", generate_ultimate_template(), "SEM_Template_4x4.xlsx")
+    
+    # --- DUMMY GENERATOR CONTROLS ---
+    st.subheader("🛠️ Template Generator Settings")
+    nx = st.slider("Jumlah Exogenous (X)", 1, 4, 4)
+    nm = st.slider("Jumlah Mediator (M)", 1, 4, 4)
+    ny = st.slider("Jumlah Endogenous (Y)", 1, 4, 4)
+    
+    st.download_button(
+        label=f"📥 Download Template ({nx}X, {nm}M, {ny}Y)",
+        data=generate_dynamic_template(nx, nm, ny),
+        file_name=f"SEM_Template_{nx}x{nm}x{ny}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+    
+    st.divider()
     
     file = st.file_uploader("Upload Data (Excel)", type=["xlsx"])
     if file:
@@ -185,7 +204,8 @@ if file and vx and vy:
             dot.node(v, v, shape='ellipse', style='filled', fillcolor=color)
         for _, r in t3.iterrows():
             p = r['Hypothesis'].split(' → ')
-            dot.edge(p[0], p[1], label=f"β={r['Beta']}")
+            if len(p) == 2:
+                dot.edge(p[0], p[1], label=f"β={r['Beta']}")
         st.graphviz_chart(dot)
         
         st.write("### Figure 2: CFA Detail")
@@ -193,11 +213,12 @@ if file and vx and vy:
         cfa = graphviz.Digraph()
         cfa.attr(rankdir='TB')
         cfa.node(sel_cfa, sel_cfa, shape='ellipse', style='filled', fillcolor='#D1C4E9')
-        for ind in m_meta[sel_cfa]:
-            cfa.node(ind, ind, shape='box')
-            cfa.node(f"e_{ind}", "e", shape='circle', width='0.2')
-            cfa.edge(sel_cfa, ind, label="λ > 0.7")
-            cfa.edge(f"e_{ind}", ind)
+        if sel_cfa in m_meta:
+            for ind in m_meta[sel_cfa]:
+                cfa.node(ind, ind, shape='box')
+                cfa.node(f"e_{ind}", "e", shape='circle', width='0.2')
+                cfa.edge(sel_cfa, ind, label="λ > 0.7")
+                cfa.edge(f"e_{ind}", ind)
         st.graphviz_chart(cfa)
 
     with tabs[4]:
@@ -217,4 +238,4 @@ if file and vx and vy:
         doc_download = export_to_word(t1, t3, fit_data)
         st.download_button("📥 Download Report (.docx)", doc_download, "SEM_Gold_Report.docx")
 else:
-    st.info("👋 Selamat datang Pak Citra. Silakan unggah file Excel untuk memulai analisis SEM 100% Lengkap.")
+    st.info("👋 Selamat datang. Silakan atur jumlah variabel di sidebar dan unduh template, atau langsung unggah file Excel Bapak.")
