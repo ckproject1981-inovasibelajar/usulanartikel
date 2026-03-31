@@ -24,6 +24,15 @@ google-generativeai
 pandas
 numpy
 scipy
+streamlit
+google-generativeai
+pandas
+numpy
+graphviz
+scipy
+plotly
+python-docx
+openpyxl
 scikit-learn
 graphviz
 python-docx
