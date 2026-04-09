@@ -38,3 +38,13 @@ graphviz
 python-docx
 matplotlib
 seaborn
+streamlit
+pandas
+numpy
+semopy
+scipy
+graphviz
+matplotlib
+seaborn
+google-generativeai
+openpyxl
