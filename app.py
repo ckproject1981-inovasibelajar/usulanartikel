@@ -70,7 +70,19 @@ with st.sidebar:
 
 # --- 4. MAIN LOGIC ---
 if uploaded_file:
-    df = pd.read_excel(uploaded_file).ffill().bfill()
+    # Load and Pre-process Data
+    df_raw = pd.read_excel(uploaded_file).ffill().bfill()
+    
+    # PERBAIKAN: Konversi semua kolom ke numerik dan buang yang tidak bisa dikonversi
+    df = df_raw.apply(pd.to_numeric, errors='coerce').dropna(axis=1, how='all')
+    
+    # PERBAIKAN: Buang kolom dengan varians nol (konstan) agar tidak menyebabkan error "division by zero" di SEM
+    df = df.loc[:, (df != df.iloc[0]).any()]
+    
+    if df.empty:
+        st.error("❌ Data kosong setelah pembersihan. Pastikan kolom indikator berisi angka.")
+        st.stop()
+
     cols = sorted(list(set([c.split('_')[0] for c in df.columns if '_' in c])))
     
     st.header("📐 Model Specification")
@@ -97,6 +109,7 @@ if uploaded_file:
         
         if st.button("🏁 Run Analysis"):
             try:
+                # Execution
                 model = Model(m_syntax + s_syntax)
                 model.fit(df)
                 inspected = model.inspect()
@@ -106,10 +119,17 @@ if uploaded_file:
                 st.divider()
                 st.subheader("📊 Model Diagnostics & Goodness of Fit")
                 m1, m2, m3, m4 = st.columns(4)
-                m1.metric("CFI", f"{stats_res.loc['CFI', 0]:.3f}")
-                m2.metric("RMSEA", f"{stats_res.loc['RMSEA', 0]:.3f}")
-                m3.metric("SRMR", f"{stats_res.loc['SRMR', 0]:.3f}")
-                m4.metric("CMIN/DF", f"{ (stats_res.loc['Chi-square', 0] / stats_res.loc['doF', 0]) :.2f}")
+                
+                # Validasi nilai indeks
+                cfi = stats_res.loc['CFI', 0] if 'CFI' in stats_res.index else 0
+                rmsea = stats_res.loc['RMSEA', 0] if 'RMSEA' in stats_res.index else 0
+                srmr = stats_res.loc['SRMR', 0] if 'SRMR' in stats_res.index else 0
+                cmin_df = (stats_res.loc['Chi-square', 0] / stats_res.loc['doF', 0]) if 'doF' in stats_res.index and stats_res.loc['doF', 0] != 0 else 0
+                
+                m1.metric("CFI (Ref > 0.90)", f"{cfi:.3f}", "✅" if cfi >= 0.9 else "⚠️")
+                m2.metric("RMSEA (Ref < 0.08)", f"{rmsea:.3f}", "✅" if rmsea <= 0.08 else "⚠️")
+                m3.metric("SRMR (Ref < 0.08)", f"{srmr:.3f}", "✅" if srmr <= 0.08 else "⚠️")
+                m4.metric("CMIN/DF (Ref < 3.0)", f"{cmin_df:.2f}", "✅" if cmin_df <= 3 else "⚠️")
 
                 tabs = st.tabs(["📉 Structural Model", "🔍 Measurement (CFA)", "📊 Data Distribution", "💎 Quality", "📝 AI Writer"])
 
@@ -151,11 +171,14 @@ if uploaded_file:
 
                 with tabs[4]:
                     if "ai_model" in locals():
-                        if st.button("Generate Draft"):
-                            prompt = f"Interpretasikan hasil SEM: CFI {stats_res.loc['CFI', 0]:.3f}, RMSEA {stats_res.loc['RMSEA', 0]:.3f}."
-                            st.write(ai_model.generate_content(prompt).text)
+                        if st.button("Generate Draft Manuscript"):
+                            with st.spinner("AI sedang meramu interpretasi..."):
+                                prompt = f"Tuliskan interpretasi hasil SEM profesional. Fit: CFI {cfi:.3f}, RMSEA {rmsea:.3f}. Fokus pada hubungan signifikan p < 0.05."
+                                st.write(ai_model.generate_content(prompt).text)
 
             except Exception as e:
-                st.error(f"Error: {e}")
+                # PERBAIKAN: Detail error yang membantu proses debugging
+                st.error(f"Detail Error: {type(e).__name__} - {e}")
+                st.info("💡 Tip: Pastikan variabel yang dipilih memiliki minimal 3 indikator dan data tidak mengandung nilai yang sama semua.")
 else:
-    st.info("💡 Unggah data untuk memulai visualisasi SEM lengkap.")
+    st.info("👋 Selamat Datang! Pilih jumlah variabel di sidebar, download template, lalu upload kembali untuk memulai.")
