@@ -6,23 +6,23 @@ import graphviz
 from semopy import Model, calc_stats
 
 # --- CONFIG ---
-st.set_page_config(page_title="SEM Pro Assistant v3.3", layout="wide")
+st.set_page_config(page_title="SEM Pro Assistant v3.4", layout="wide")
 
-# --- GEN DATA (Ultra Stable) ---
+# --- ULTRA-STABLE GENERATOR ---
 def generate_stable_data(nx, nm, ny):
-    rows = 500
+    rows = 600 # Sampel lebih besar untuk stabilitas statistik
     data = {}
-    base = np.random.normal(3, 0.5, rows)
+    base = np.random.normal(3.5, 0.4, rows)
     
     def add_vars(prefix, count, latent_base):
         for i in range(1, count + 1):
-            l_val = latent_base + np.random.normal(0, 0.1, rows)
-            for j in range(1, 4): # 3 Indikator
-                data[f"{prefix}{i}_{j}"] = np.clip(0.9 * l_val + np.random.normal(0, 0.05, rows), 1, 5)
+            l_val = latent_base + np.random.normal(0, 0.05, rows)
+            for j in range(1, 4): 
+                data[f"{prefix}{i}_{j}"] = np.clip(0.95 * l_val + np.random.normal(0, 0.05, rows), 1, 5)
 
     add_vars("X", nx, base)
-    add_vars("M", nm, 0.8 * base)
-    add_vars("Y", ny, 0.7 * base)
+    add_vars("M", nm, 0.85 * base)
+    add_vars("Y", ny, 0.75 * base)
     
     df = pd.DataFrame(data)
     output = io.BytesIO()
@@ -32,22 +32,20 @@ def generate_stable_data(nx, nm, ny):
 
 # --- SIDEBAR ---
 with st.sidebar:
-    st.title("🔬 SEM Engine v3.3")
+    st.title("🔬 SEM Engine v3.4")
     with st.expander("🛠️ Control Panel"):
         nx_i = st.number_input("Variabel X", 1, 5, 3)
-        nm_i = st.number_input("Variabel M", 0, 5, 2)
+        nm_i = st.number_input("Variabel M", 0, 5, 1)
         ny_i = st.number_input("Variabel Y", 1, 5, 2)
         st.download_button("📥 Get Template", generate_stable_data(nx_i, nm_i, ny_i), "data_sem.xlsx")
     uploaded = st.file_uploader("Upload Data", type=["xlsx"])
 
 # --- MAIN ---
 if uploaded:
-    # 1. Loading & Cleaning (Strikter)
     df = pd.read_excel(uploaded)
-    df.columns = [str(c).strip().replace(' ', '') for c in df.columns] # Hapus spasi tak terlihat
+    df.columns = [str(c).strip().replace(' ', '') for c in df.columns]
     df = df.apply(pd.to_numeric, errors='coerce').dropna()
     
-    # 2. Variable Detection
     available = sorted(list(set([c.split('_')[0] for c in df.columns if '_' in c])))
     
     st.header("📐 Model Setup")
@@ -57,7 +55,6 @@ if uploaded:
     with c3: vy = st.multiselect("Endogenous (Y)", available)
 
     if vx and vy:
-        # 3. Dynamic Syntax Building
         m_syntax = ""
         for v in (vx + vm + vy):
             inds = [c for c in df.columns if c.startswith(v + "_")]
@@ -69,34 +66,48 @@ if uploaded:
         for y in vy:
             for m in (vx + vm): s_syntax += f"{y} ~ {m}\n"
 
-        if st.button("🏁 Run Advanced Analysis"):
+        if st.button("🏁 Run Final Analysis"):
             try:
-                # DEBUG: Tampilkan syntax yang dikirim ke SEMOPY
-                with st.expander("🔍 Lihat Syntax Model"):
-                    st.code(m_syntax + s_syntax)
-                
                 model = Model(m_syntax + s_syntax)
                 model.fit(df)
-                
-                # Cek Inspect secara manual sebelum calc_stats
                 inspected = model.inspect()
                 
+                # --- SAFE STATS RETRIEVAL ---
+                st.divider()
                 try:
-                    stats_res = calc_stats(model).T
+                    stats_df = calc_stats(model)
+                    # Jika stats_df adalah Series, ubah ke DataFrame
+                    if isinstance(stats_df, pd.Series):
+                        stats_df = stats_df.to_frame().T
                     
-                    st.success("✅ Analisis Berhasil")
-                    m1, m2, m3 = st.columns(3)
-                    # Mengambil nilai baris pertama (index 0) secara aman
-                    m1.metric("CFI", f"{stats_res.iloc[0]['CFI']:.3f}")
-                    m2.metric("RMSEA", f"{stats_res.iloc[0]['RMSEA']:.3f}")
-                    m3.metric("SRMR", f"{stats_res.iloc[0]['SRMR']:.3f}")
+                    st.subheader("📊 Goodness of Fit Index")
+                    cols = st.columns(len(stats_df.columns[:4])) # Ambil 4 pertama
                     
-                    st.write("### Tabel Koefisien")
-                    st.dataframe(inspected)
-                except Exception as e_stats:
-                    st.error(f"⚠️ Model konvergen tapi statistik gagal dihitung: {e_stats}")
-                    st.write("Coba periksa apakah jumlah data cukup banyak (min. 100-200 baris).")
+                    for i, col_name in enumerate(stats_df.columns[:4]):
+                        val = stats_df.iloc[0][col_name]
+                        cols[i].metric(col_name, f"{val:.3f}")
+                        
+                    with st.expander("📈 Lihat Semua Metrik Fit"):
+                        st.table(stats_df)
+
+                except Exception as e_inner:
+                    st.warning(f"Metrik Fit (CFI/RMSEA) tidak tersedia: {e_inner}")
+                    st.info("Ini biasanya terjadi jika model terlalu sederhana (Just-Identified).")
+
+                # --- PATH DIAGRAM ---
+                st.subheader("🖼️ Path Diagram")
+                dot = graphviz.Digraph(graph_attr={'rankdir':'LR'})
+                for v in (vx + vm + vy):
+                    dot.node(v, v, shape='ellipse', style='filled', fillcolor='#E3F2FD')
+                
+                paths = inspected[inspected['op'] == '~']
+                for _, r in paths.iterrows():
+                    label = f"{r['Estimate']:.2f}"
+                    dot.edge(str(r['rval']), str(r['lval']), label=label)
+                st.graphviz_chart(dot)
+
+                st.subheader("📋 Tabel Koefisien Lengkap")
+                st.dataframe(inspected)
 
             except Exception as e:
-                st.error(f"❌ Gagal Total: {e}")
-                st.info("Saran: Kurangi jumlah variabel mediator atau pastikan nama kolom di Excel persis X1_1, X1_2, dst.")
+                st.error(f"❌ Kesalahan Fatal: {e}")
