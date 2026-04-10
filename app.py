@@ -24,29 +24,36 @@ if "GEMINI_API_KEY" in st.secrets:
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
     ai_model = genai.GenerativeModel('gemini-1.5-flash')
 
-# --- 2. HIGH-CONVERGENCE DATA GENERATOR ---
-def generate_high_fit_data(n_x, n_m, n_y):
-    rows = 450  # Sampel lebih besar untuk stabilitas
+# --- 2. HIGH-STABILITY DATA GENERATOR ---
+def generate_stable_data(n_x, n_m, n_y):
+    # Menggunakan jumlah baris lebih banyak untuk menjamin konvergensi
+    rows = 500 
     data = {}
     
-    # Generate Latent dengan Korelasi Kuat
-    L_X_combined = np.random.normal(3.5, 0.6, rows)
-    latents_x = {f"X{i}": 0.8 * L_X_combined + np.random.normal(0, 0.3, rows) for i in range(1, n_x + 1)}
+    # Membuat 'True Latent Score' yang saling berhubungan kuat
+    # Laten X (Independen)
+    latents_x = {f"X{i}": np.random.normal(3.5, 0.5, rows) for i in range(1, n_x + 1)}
     
-    sum_x = sum(latents_x.values()) / n_x
-    latents_m = {f"M{i}": 0.75 * sum_x + np.random.normal(0, 0.2, rows) for i in range(1, n_m + 1)}
+    # Laten M (Mediator) - sangat dipengaruhi oleh rata-rata X
+    avg_x = sum(latents_x.values()) / n_x
+    latents_m = {f"M{i}": 0.8 * avg_x + np.random.normal(0, 0.2, rows) for i in range(1, n_m + 1)}
     
-    base_for_y = sum(latents_m.values())/n_m if n_m > 0 else sum_x
-    latents_y = {f"Y{i}": 0.65 * base_for_y + 0.25 * sum_x + np.random.normal(0, 0.2, rows) for i in range(1, n_y + 1)}
+    # Laten Y (Dependen) - dipengaruhi M dan X
+    avg_m = sum(latents_m.values()) / n_m if n_m > 0 else avg_x
+    latents_y = {f"Y{i}": 0.7 * avg_m + 0.2 * avg_x + np.random.normal(0, 0.2, rows) for i in range(1, n_y + 1)}
 
-    # Fungsi penambahan indikator dengan Loading Factor tinggi (~0.85)
-    def add_inds(val, prefix, count):
-        for i in range(1, 4):
-            data[f"{prefix}{count}_{i}"] = np.clip(0.85 * val + np.random.normal(0, 0.15, rows), 1, 5)
+    # Fungsi untuk membuat indikator dengan Loading Factor tinggi (> 0.8)
+    def add_indicators(latent_val, prefix, count):
+        for i in range(1, 4): # 3 indikator per laten
+            # Rumus: Y = 0.9*X + error (Sangat bersih untuk SEM)
+            col_name = f"{prefix}{count}_{i}"
+            measure = 0.9 * latent_val + np.random.normal(0, 0.1, rows)
+            data[col_name] = np.clip(measure, 1, 5)
 
-    for i in range(1, n_x + 1): add_inds(latents_x[f"X{i}"], "X", i)
-    for i in range(1, n_m + 1): add_inds(latents_m[f"M{i}"], "M", i)
-    for i in range(1, n_y + 1): add_inds(latents_y[f"Y{i}"], "Y", i)
+    # Isi data dengan indikator
+    for i in range(1, n_x + 1): add_indicators(latents_x[f"X{i}"], "X", i)
+    for i in range(1, n_m + 1): add_indicators(latents_m[f"M{i}"], "M", i)
+    for i in range(1, n_y + 1): add_indicators(latents_y[f"Y{i}"], "Y", i)
     
     df = pd.DataFrame(data)
     output = io.BytesIO()
@@ -68,88 +75,84 @@ def get_ave_cr_table(inspected, latent_dict):
 
 # --- 4. SIDEBAR ---
 with st.sidebar:
-    st.title("🔬 SEM Engine v3.0")
+    st.title("🔬 SEM Engine v3.1")
     st.markdown("---")
     
-    with st.expander("🌟 Generator Data (Pasti Fit)"):
-        nx = st.number_input("Variabel X", 1, 10, 3)
-        nm = st.number_input("Variabel M", 0, 10, 1)
-        ny = st.number_input("Variabel Y", 1, 10, 2)
-        st.download_button("📥 Download Template High-Fit", 
-                          generate_high_fit_data(nx, nm, ny), 
-                          "template_high_fit.xlsx")
+    with st.expander("🌟 Generator Data (Sangat Stabil)"):
+        nx_val = st.number_input("Variabel X", 1, 10, 3)
+        nm_val = st.number_input("Variabel M", 0, 10, 1)
+        ny_val = st.number_input("Variabel Y", 1, 10, 2)
+        st.download_button("📥 Download Template SEM", 
+                          generate_stable_data(nx_val, nm_val, ny_val), 
+                          "template_stabil.xlsx")
 
     uploaded_file = st.file_uploader("Upload Data Riset (.xlsx)", type=["xlsx"])
     st.caption("Dikembangkan oleh Citra Kurniawan & PUI DLI - 2026")
 
 # --- 5. MAIN CONTENT ---
 if uploaded_file:
-    # Pre-processing Agresif
     df_raw = pd.read_excel(uploaded_file).ffill().bfill()
+    # Pembersihan kolom teks dan kolom dengan varians nol
     df = df_raw.apply(pd.to_numeric, errors='coerce').dropna(axis=1, how='all')
-    df = df.loc[:, (df.std() > 0.01)] # Buat kolom yang hampir konstan
+    df = df.loc[:, (df.std() > 0.05)] 
     
     all_cols = sorted(list(set([c.split('_')[0] for c in df.columns if '_' in c])))
     
     st.header("📐 Pemodelan Struktural")
     c1, c2, c3 = st.columns(3)
-    with c1: vx = st.multiselect("Exogenous (X)", all_cols)
-    with c2: vm = st.multiselect("Mediators (M)", all_cols)
-    with c3: vy = st.multiselect("Endogenous (Y)", all_cols)
+    with c1: vx = st.multiselect("Exogenous (X)", all_cols, help="Variabel yang mempengaruhi")
+    with c2: vm = st.multiselect("Mediators (M)", all_cols, help="Variabel perantara")
+    with c3: vy = st.multiselect("Endogenous (Y)", all_cols, help="Variabel yang dipengaruhi")
 
     if vx and vy:
-        # Generate Syntax
+        # Pembangun Syntax Model
         m_syntax = "# Measurement\n"
         latent_map = {}
         for v in (vx + vm + vy):
             inds = [c for c in df.columns if c.startswith(v + "_")]
-            m_syntax += f"{v} =~ {' + '.join(inds)}\n"
-            latent_map[v] = inds
+            if inds:
+                m_syntax += f"{v} =~ {' + '.join(inds)}\n"
+                latent_map[v] = inds
         
         s_syntax = "# Structural\n"
         for m in vm:
             for x in vx: s_syntax += f"{m} ~ {x}\n"
         for y in vy:
-            for m in (vx + vm): s_syntax += f"{y} ~ {m}\n"
+            for m in vm: s_syntax += f"{y} ~ {m}\n"
+            for x in vx: s_syntax += f"{y} ~ {x}\n"
         
         if st.button("🏁 Jalankan SEM Analysis"):
-            with st.spinner("Mengoptimasi Matriks Kovarians..."):
+            with st.spinner("Sedang menghitung model..."):
                 try:
-                    # Core SEM
                     model = Model(m_syntax + s_syntax)
                     model.fit(df)
                     inspected = model.inspect()
                     
-                    # Safe Stats Retrieval
                     try:
                         stats_res = calc_stats(model).T
                     except:
                         stats_res = pd.DataFrame()
 
-                    st.divider()
-                    
-                    # --- METRICS SECTION ---
                     if not stats_res.empty and 0 in stats_res.columns:
+                        st.divider()
                         st.subheader("📊 Goodness of Fit Index")
                         m1, m2, m3, m4 = st.columns(4)
                         
                         def get_idx(key): return stats_res.loc[key, 0] if key in stats_res.index else 0
-                        
                         cfi, rmsea, srmr, chi, dof = get_idx('CFI'), get_idx('RMSEA'), get_idx('SRMR'), get_idx('Chi-square'), get_idx('doF')
                         
-                        m1.metric("CFI", f"{cfi:.3f}", "Good" if cfi > 0.9 else "Poor")
-                        m2.metric("RMSEA", f"{rmsea:.3f}", "Good" if rmsea < 0.08 else "Poor")
-                        m3.metric("SRMR", f"{srmr:.3f}", "Good" if srmr < 0.08 else "Poor")
+                        m1.metric("CFI", f"{cfi:.3f}", "Lulus" if cfi > 0.9 else "Gagal")
+                        m2.metric("RMSEA", f"{rmsea:.3f}", "Lulus" if rmsea < 0.08 else "Gagal")
+                        m3.metric("SRMR", f"{srmr:.3f}", "Lulus" if srmr < 0.08 else "Gagal")
                         m4.metric("CMIN/DF", f"{chi/dof:.2f}" if dof > 0 else "N/A")
 
-                        # --- TABBED RESULTS ---
-                        t1, t2, t3, t4, t5 = st.tabs(["🖼️ Diagram Jalur", "🔍 Validitas/CFA", "📈 Distribusi", "📋 Tabel Koefisien", "🤖 AI Report"])
+                        tabs = st.tabs(["🖼️ Path Diagram", "🔍 Validitas", "📈 Distribusi", "📋 Koefisien Jalur", "🤖 AI Interpretasi"])
                         
-                        with t1:
-                            dot = graphviz.Digraph(graph_attr={'rankdir':'LR', 'splines':'true'})
+                        with tabs[0]:
+                            dot = graphviz.Digraph(graph_attr={'rankdir':'LR'})
                             for v in (vx + vm + vy):
                                 fill = '#D1E8FF' if v in vx else ('#D1FFD7' if v in vm else '#FFE8D1')
-                                dot.node(v, v, shape='ellipse', style='filled', color='#333333', fillcolor=fill)
+                                dot.node(v, v, shape='ellipse', style='filled', fillcolor=fill)
                             
                             paths = inspected[inspected['op'] == '~']
                             for _, r in paths.iterrows():
@@ -157,36 +160,31 @@ if uploaded_file:
                                 dot.edge(r['rval'], r['lval'], label=f"{r['Estimate']:.2f}{star}")
                             st.graphviz_chart(dot)
 
-                        with t2:
-                            st.write("### Analisis CFA & Reliability")
-                            st.dataframe(get_ave_cr_table(inspected, latent_map), use_container_width=True)
-                            st.info("Standar: AVE > 0.5 & CR > 0.7")
+                        with tabs[1]:
+                            st.write("### Konstruk AVE & CR")
+                            st.table(get_ave_cr_table(inspected, latent_map))
 
-                        with t3:
-                            st.write("### Cek Normalitas Indikator")
+                        with tabs[2]:
                             sel_ind = st.selectbox("Pilih Indikator:", df.columns)
-                            fig, ax = plt.subplots(figsize=(10, 4))
+                            fig, ax = plt.subplots(figsize=(8, 3))
                             sns.histplot(df[sel_ind], kde=True, color="#007bff", ax=ax)
                             st.pyplot(fig)
 
-                        with t4:
-                            st.write("### Regression Weights (Direct Effects)")
-                            st.dataframe(paths.style.background_gradient(subset=['Estimate'], cmap='Blues'))
+                        with tabs[3]:
+                            st.write("### Regression Weights")
+                            st.dataframe(paths)
 
-                        with t5:
-                            if st.button("Generate Academic Draft"):
+                        with tabs[4]:
+                            if st.button("Generate Draft Narasi"):
                                 if "ai_model" in locals():
                                     sig_rel = paths[paths['p-val'] < 0.05]
-                                    txt_path = ", ".join([f"{r['rval']}→{r['lval']}" for _, r in sig_rel.iterrows()])
-                                    prompt = f"Interpretasikan hasil SEM ini: CFI={cfi:.3f}, RMSEA={rmsea:.3f}. Hubungan signifikan: {txt_path}. Tulis dalam gaya jurnal ilmiah."
+                                    txt_path = ", ".join([f"{r['rval']} ke {r['lval']}" for _, r in sig_rel.iterrows()])
+                                    prompt = f"Analisis hasil SEM ini secara akademis: CFI {cfi:.3f}, Hubungan signifikan: {txt_path}. Tulis dalam Bahasa Indonesia formal."
                                     st.markdown(f"<div class='report-box'>{ai_model.generate_content(prompt).text}</div>", unsafe_allow_html=True)
-                                else:
-                                    st.warning("API Key tidak ditemukan.")
-                    else:
-                        st.error("❌ Model Gagal Konvergen.")
-                        st.warning("Data dummy Anda terlalu acak atau variabel terlalu banyak. Gunakan tombol 'Download Template' di sidebar untuk mendapatkan data yang sudah tersinkronisasi sempurna.")
 
+                    else:
+                        st.error("⚠️ Estimasi Gagal Konvergen. Pastikan data diunggah dengan format yang benar (Gunakan template dari sidebar).")
                 except Exception as e:
-                    st.error(f"🚨 System Error: {e}")
+                    st.error(f"🚨 Kesalahan: {e}")
 else:
-    st.info("💡 Gunakan generator di sidebar untuk membuat data template, lalu unggah kembali untuk melihat analisis lengkap.")
+    st.info("💡 Selamat datang! Download template di sidebar, isi, lalu upload kembali untuk memulai analisis SEM.")
