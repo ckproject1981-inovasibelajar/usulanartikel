@@ -9,38 +9,44 @@ import google.generativeai as genai
 from semopy import Model, calc_stats
 from scipy import stats
 
-# --- 1. INITIALIZATION ---
-st.set_page_config(page_title="SEM Pro Assistant Ultimate", layout="wide", page_icon="🔬")
+# --- 1. CONFIGURATION ---
+st.set_page_config(page_title="SEM Pro Assistant Super Ultimate", layout="wide", page_icon="🔬")
 
 st.markdown("""
     <style>
-    .main { background-color: #f8f9fa; }
-    .stMetric { background-color: #ffffff; padding: 15px; border-radius: 10px; border: 1px solid #e0e0e0; }
+    .main { background-color: #f0f2f6; }
+    .stMetric { background-color: #ffffff; padding: 20px; border-radius: 12px; border: 1px solid #d1d1d1; box-shadow: 2px 2px 5px rgba(0,0,0,0.05); }
+    .report-box { background-color: #ffffff; padding: 20px; border-radius: 10px; border-left: 5px solid #007bff; margin-top: 20px; }
     </style>
     """, unsafe_allow_html=True)
 
-# AI Configuration
 if "GEMINI_API_KEY" in st.secrets:
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
     ai_model = genai.GenerativeModel('gemini-1.5-flash')
 
-# --- 2. ADVANCED DUMMY GENERATOR (Synced for Fit Model) ---
-def generate_synced_data(n_x=3, n_m=3, n_y=3):
-    rows = 300
+# --- 2. HIGH-CONVERGENCE DATA GENERATOR ---
+def generate_high_fit_data(n_x, n_m, n_y):
+    rows = 450  # Sampel lebih besar untuk stabilitas
     data = {}
-    # Base Latent
-    L_X = np.random.normal(3.5, 0.7, rows)
-    L_M = 0.6 * L_X + np.random.normal(0, 0.4, rows)
-    L_Y = 0.5 * L_M + 0.3 * L_X + np.random.normal(0, 0.4, rows)
     
-    def add_indicators(latent, prefix, count):
-        for i in range(1, 4): # 3 indikator per laten
-            col_name = f"{prefix}{count}_{i}"
-            data[col_name] = np.clip(0.8 * latent + np.random.normal(0, 0.3, rows), 1, 5)
+    # Generate Latent dengan Korelasi Kuat
+    L_X_combined = np.random.normal(3.5, 0.6, rows)
+    latents_x = {f"X{i}": 0.8 * L_X_combined + np.random.normal(0, 0.3, rows) for i in range(1, n_x + 1)}
+    
+    sum_x = sum(latents_x.values()) / n_x
+    latents_m = {f"M{i}": 0.75 * sum_x + np.random.normal(0, 0.2, rows) for i in range(1, n_m + 1)}
+    
+    base_for_y = sum(latents_m.values())/n_m if n_m > 0 else sum_x
+    latents_y = {f"Y{i}": 0.65 * base_for_y + 0.25 * sum_x + np.random.normal(0, 0.2, rows) for i in range(1, n_y + 1)}
 
-    for i in range(1, n_x + 1): add_indicators(L_X, "X", i)
-    for i in range(1, n_m + 1): add_indicators(L_M, "M", i)
-    for i in range(1, n_y + 1): add_indicators(L_Y, "Y", i)
+    # Fungsi penambahan indikator dengan Loading Factor tinggi (~0.85)
+    def add_inds(val, prefix, count):
+        for i in range(1, 4):
+            data[f"{prefix}{count}_{i}"] = np.clip(0.85 * val + np.random.normal(0, 0.15, rows), 1, 5)
+
+    for i in range(1, n_x + 1): add_inds(latents_x[f"X{i}"], "X", i)
+    for i in range(1, n_m + 1): add_inds(latents_m[f"M{i}"], "M", i)
+    for i in range(1, n_y + 1): add_inds(latents_y[f"Y{i}"], "Y", i)
     
     df = pd.DataFrame(data)
     output = io.BytesIO()
@@ -48,166 +54,139 @@ def generate_synced_data(n_x=3, n_m=3, n_y=3):
         df.to_excel(writer, index=False)
     return output.getvalue()
 
-def get_ave_cr(inspected, latent_dict):
+# --- 3. ANALYTICS TOOLS ---
+def get_ave_cr_table(inspected, latent_dict):
     results = []
     loadings = inspected[inspected['op'] == '~=']
-    for latent, inds in latent_dict.items():
+    for latent in latent_dict.keys():
         l_vals = loadings[loadings['lval'] == latent]['Estimate'].values
         if len(l_vals) > 0:
             ave = np.mean(np.square(l_vals))
             cr = np.sum(l_vals)**2 / (np.sum(l_vals)**2 + np.sum(1 - np.square(l_vals)))
-            results.append({"Construct": latent, "AVE": round(ave, 3), "CR": round(cr, 3)})
+            results.append({"Konstruk": latent, "AVE (>0.5)": round(ave, 3), "CR (>0.7)": round(cr, 3)})
     return pd.DataFrame(results)
 
-# --- 3. SIDEBAR ---
+# --- 4. SIDEBAR ---
 with st.sidebar:
-    st.title("🔬 SEM Engine v2.5")
-    st.subheader("Pusat Pengaturan Data")
+    st.title("🔬 SEM Engine v3.0")
+    st.markdown("---")
     
-    with st.expander("🛠️ Generator Data Dummy"):
-        nx_in = st.number_input("Jumlah Independen (X)", 1, 10, 3)
-        nm_in = st.number_input("Jumlah Mediator (M)", 0, 10, 1)
-        ny_in = st.number_input("Jumlah Dependen (Y)", 1, 10, 2)
-        st.download_button("📥 Download Template Excel", 
-                          generate_synced_data(nx_in, nm_in, ny_in), 
-                          "template_sem_pro.xlsx")
+    with st.expander("🌟 Generator Data (Pasti Fit)"):
+        nx = st.number_input("Variabel X", 1, 10, 3)
+        nm = st.number_input("Variabel M", 0, 10, 1)
+        ny = st.number_input("Variabel Y", 1, 10, 2)
+        st.download_button("📥 Download Template High-Fit", 
+                          generate_high_fit_data(nx, nm, ny), 
+                          "template_high_fit.xlsx")
 
-    uploaded_file = st.file_uploader("Upload File Riset Anda (.xlsx)", type=["xlsx"])
-    st.info("Pastikan format nama kolom: Variabel_Indikator (Contoh: X1_1, X1_2)")
+    uploaded_file = st.file_uploader("Upload Data Riset (.xlsx)", type=["xlsx"])
+    st.caption("Dikembangkan oleh Citra Kurniawan & PUI DLI - 2026")
 
-# --- 4. MAIN LOGIC ---
+# --- 5. MAIN CONTENT ---
 if uploaded_file:
-    # --- Data Cleaning ---
+    # Pre-processing Agresif
     df_raw = pd.read_excel(uploaded_file).ffill().bfill()
-    # Pastikan numerik & buang kolom konstan (varians 0)
     df = df_raw.apply(pd.to_numeric, errors='coerce').dropna(axis=1, how='all')
-    df = df.loc[:, (df != df.iloc[0]).any()]
+    df = df.loc[:, (df.std() > 0.01)] # Buat kolom yang hampir konstan
     
-    if df.empty:
-        st.error("❌ Data tidak valid atau kosong setelah dibersihkan.")
-        st.stop()
-
-    cols = sorted(list(set([c.split('_')[0] for c in df.columns if '_' in c])))
+    all_cols = sorted(list(set([c.split('_')[0] for c in df.columns if '_' in c])))
     
-    st.header("📐 Spesifikasi Model SEM")
+    st.header("📐 Pemodelan Struktural")
     c1, c2, c3 = st.columns(3)
-    with c1: vx = st.multiselect("Variabel Independen (X)", cols)
-    with c2: vm = st.multiselect("Variabel Mediator (M)", cols)
-    with c3: vy = st.multiselect("Variabel Dependen (Y)", cols)
+    with c1: vx = st.multiselect("Exogenous (X)", all_cols)
+    with c2: vm = st.multiselect("Mediators (M)", all_cols)
+    with c3: vy = st.multiselect("Endogenous (Y)", all_cols)
 
     if vx and vy:
-        # Build Syntax Dinamis
-        m_syntax = "# Measurement Model\n"
+        # Generate Syntax
+        m_syntax = "# Measurement\n"
         latent_map = {}
         for v in (vx + vm + vy):
             inds = [c for c in df.columns if c.startswith(v + "_")]
-            if inds:
-                m_syntax += f"{v} =~ {' + '.join(inds)}\n"
-                latent_map[v] = inds
+            m_syntax += f"{v} =~ {' + '.join(inds)}\n"
+            latent_map[v] = inds
         
-        s_syntax = "# Structural Model\n"
+        s_syntax = "# Structural\n"
         for m in vm:
             for x in vx: s_syntax += f"{m} ~ {x}\n"
         for y in vy:
-            for m in vm: s_syntax += f"{y} ~ {m}\n"
-            for x in vx: s_syntax += f"{y} ~ {x}\n"
+            for m in (vx + vm): s_syntax += f"{y} ~ {m}\n"
         
-        full_syntax = m_syntax + s_syntax
-        
-        if st.button("🏁 Jalankan Analisis Sekarang"):
-            with st.spinner("Sedang menghitung estimasi model..."):
+        if st.button("🏁 Jalankan SEM Analysis"):
+            with st.spinner("Mengoptimasi Matriks Kovarians..."):
                 try:
-                    # 1. Fit Model
-                    model = Model(full_syntax)
+                    # Core SEM
+                    model = Model(m_syntax + s_syntax)
                     model.fit(df)
                     inspected = model.inspect()
                     
-                    # 2. Ambil Statistik dengan Proteksi KeyError
+                    # Safe Stats Retrieval
                     try:
                         stats_res = calc_stats(model).T
                     except:
                         stats_res = pd.DataFrame()
 
-                    # --- RESULTS UI ---
                     st.divider()
-                    st.subheader("📊 Diagnostik Model (Goodness of Fit)")
                     
+                    # --- METRICS SECTION ---
                     if not stats_res.empty and 0 in stats_res.columns:
+                        st.subheader("📊 Goodness of Fit Index")
                         m1, m2, m3, m4 = st.columns(4)
-                        def safe_stat(idx): return stats_res.loc[idx, 0] if idx in stats_res.index else None
-
-                        cfi = safe_stat('CFI')
-                        rmsea = safe_stat('RMSEA')
-                        srmr = safe_stat('SRMR')
-                        chi = safe_stat('Chi-square')
-                        dof = safe_stat('doF')
-
-                        m1.metric("CFI (Ref > 0.90)", f"{cfi:.3f}" if cfi is not None else "N/A", "✅" if cfi and cfi >= 0.9 else "⚠️")
-                        m2.metric("RMSEA (Ref < 0.08)", f"{rmsea:.3f}" if rmsea is not None else "N/A", "✅" if rmsea and rmsea <= 0.08 else "⚠️")
-                        m3.metric("SRMR (Ref < 0.08)", f"{srmr:.3f}" if srmr is not None else "N/A", "✅" if srmr and srmr <= 0.08 else "⚠️")
                         
-                        if chi and dof and dof > 0:
-                            m4.metric("CMIN/DF (Ref < 3.0)", f"{chi/dof:.2f}", "✅" if (chi/dof) <= 3 else "⚠️")
-                        else:
-                            m4.metric("CMIN/DF", "N/A")
-
-                        # --- TABS ---
-                        tabs = st.tabs(["📉 Diagram Jalur", "🔍 Analisis CFA", "📊 Sebaran Data", "💎 Validitas & Reliabilitas", "📝 Draft Laporan AI"])
+                        def get_idx(key): return stats_res.loc[key, 0] if key in stats_res.index else 0
                         
-                        with tabs[0]:
-                            st.write("### Structural Path Diagram")
-                            dot = graphviz.Digraph()
-                            dot.attr(rankdir='LR')
+                        cfi, rmsea, srmr, chi, dof = get_idx('CFI'), get_idx('RMSEA'), get_idx('SRMR'), get_idx('Chi-square'), get_idx('doF')
+                        
+                        m1.metric("CFI", f"{cfi:.3f}", "Good" if cfi > 0.9 else "Poor")
+                        m2.metric("RMSEA", f"{rmsea:.3f}", "Good" if rmsea < 0.08 else "Poor")
+                        m3.metric("SRMR", f"{srmr:.3f}", "Good" if srmr < 0.08 else "Poor")
+                        m4.metric("CMIN/DF", f"{chi/dof:.2f}" if dof > 0 else "N/A")
+
+                        # --- TABBED RESULTS ---
+                        t1, t2, t3, t4, t5 = st.tabs(["🖼️ Diagram Jalur", "🔍 Validitas/CFA", "📈 Distribusi", "📋 Tabel Koefisien", "🤖 AI Report"])
+                        
+                        with t1:
+                            dot = graphviz.Digraph(graph_attr={'rankdir':'LR', 'splines':'true'})
                             for v in (vx + vm + vy):
-                                color = '#E3F2FD' if v in vx else ('#E8F5E9' if v in vm else '#FFF3E0')
-                                dot.node(v, v, shape='ellipse', style='filled', fillcolor=color)
+                                fill = '#D1E8FF' if v in vx else ('#D1FFD7' if v in vm else '#FFE8D1')
+                                dot.node(v, v, shape='ellipse', style='filled', color='#333333', fillcolor=fill)
                             
                             paths = inspected[inspected['op'] == '~']
                             for _, r in paths.iterrows():
-                                sig = "*" if r['p-val'] < 0.05 else ""
-                                dot.edge(r['rval'], r['lval'], label=f"{r['Estimate']:.2f}{sig}")
+                                star = "***" if r['p-val'] < 0.001 else ("**" if r['p-val'] < 0.01 else ("*" if r['p-val'] < 0.05 else ""))
+                                dot.edge(r['rval'], r['lval'], label=f"{r['Estimate']:.2f}{star}")
                             st.graphviz_chart(dot)
 
-                        with tabs[1]:
-                            st.write("### Measurement Model Detail")
-                            sel_v = st.selectbox("Pilih Konstruk Laten:", vx + vm + vy)
-                            cfa_dot = graphviz.Digraph()
-                            cfa_dot.node(sel_v, sel_v, shape='ellipse', style='filled', fillcolor='#D1C4E9')
-                            loadings = inspected[(inspected['op'] == '~=') & (inspected['lval'] == sel_v)]
-                            for _, r in loadings.iterrows():
-                                cfa_dot.node(r['rval'], r['rval'], shape='box')
-                                cfa_dot.edge(sel_v, r['rval'], label=f"λ={r['Estimate']:.2f}")
-                            st.graphviz_chart(cfa_dot)
+                        with t2:
+                            st.write("### Analisis CFA & Reliability")
+                            st.dataframe(get_ave_cr_table(inspected, latent_map), use_container_width=True)
+                            st.info("Standar: AVE > 0.5 & CR > 0.7")
 
-                        with tabs[2]:
-                            st.write("### Uji Normalitas (Histogram)")
-                            target_col = st.selectbox("Pilih Indikator untuk Dicek:", df.columns)
-                            fig, ax = plt.subplots(figsize=(8, 4))
-                            sns.histplot(df[target_col], kde=True, color="skyblue", ax=ax)
+                        with t3:
+                            st.write("### Cek Normalitas Indikator")
+                            sel_ind = st.selectbox("Pilih Indikator:", df.columns)
+                            fig, ax = plt.subplots(figsize=(10, 4))
+                            sns.histplot(df[sel_ind], kde=True, color="#007bff", ax=ax)
                             st.pyplot(fig)
 
-                        with tabs[3]:
-                            st.write("### Construct Reliability (AVE & CR)")
-                            st.table(get_ave_cr(inspected, latent_map))
-                            st.write("### Daftar Koefisien Jalur (Full Table)")
-                            st.dataframe(inspected)
+                        with t4:
+                            st.write("### Regression Weights (Direct Effects)")
+                            st.dataframe(paths.style.background_gradient(subset=['Estimate'], cmap='Blues'))
 
-                        with tabs[4]:
-                            if st.button("✍️ Buat Draft Artikel"):
+                        with t5:
+                            if st.button("Generate Academic Draft"):
                                 if "ai_model" in locals():
-                                    with st.spinner("AI sedang menganalisis hasil..."):
-                                        p_sig = paths[paths['p-val'] < 0.05]
-                                        p_txt = ", ".join([f"{r['rval']} ke {r['lval']}" for _, r in p_sig.iterrows()])
-                                        prompt = f"Tuliskan laporan hasil penelitian SEM. Model Fit: CFI={cfi:.3f}. Hubungan signifikan pada: {p_txt}. Gunakan bahasa akademik Indonesia yang formal."
-                                        st.write(ai_model.generate_content(prompt).text)
+                                    sig_rel = paths[paths['p-val'] < 0.05]
+                                    txt_path = ", ".join([f"{r['rval']}→{r['lval']}" for _, r in sig_rel.iterrows()])
+                                    prompt = f"Interpretasikan hasil SEM ini: CFI={cfi:.3f}, RMSEA={rmsea:.3f}. Hubungan signifikan: {txt_path}. Tulis dalam gaya jurnal ilmiah."
+                                    st.markdown(f"<div class='report-box'>{ai_model.generate_content(prompt).text}</div>", unsafe_allow_html=True)
                                 else:
-                                    st.warning("API Key Gemini belum diatur di secrets.")
+                                    st.warning("API Key tidak ditemukan.")
                     else:
-                        st.error("⚠️ Estimasi Gagal Konvergen. Model terlalu kompleks atau data kurang variatif.")
-                        st.info("Coba kurangi jumlah variabel atau gunakan data dummy untuk tes.")
+                        st.error("❌ Model Gagal Konvergen.")
+                        st.warning("Data dummy Anda terlalu acak atau variabel terlalu banyak. Gunakan tombol 'Download Template' di sidebar untuk mendapatkan data yang sudah tersinkronisasi sempurna.")
 
                 except Exception as e:
-                    st.error(f"🚨 Kesalahan Teknis: {type(e).__name__} - {e}")
-
+                    st.error(f"🚨 System Error: {e}")
 else:
-    st.info("💡 Silakan unduh template di sidebar, isi dengan data Anda, lalu unggah kembali untuk memulai analisis.")
+    st.info("💡 Gunakan generator di sidebar untuk membuat data template, lalu unggah kembali untuk melihat analisis lengkap.")
